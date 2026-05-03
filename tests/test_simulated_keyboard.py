@@ -5,9 +5,12 @@ import pytest
 
 @pytest.fixture
 def keyboard_controller():
-    with patch("pynput.keyboard.Controller") as ctor_mock:
-        instance = MagicMock()
-        ctor_mock.return_value = instance
+    # Patch app._pynput_keyboard, not pynput: resolving pynput.keyboard.* imports
+    # the display backend and fails on headless Linux CI.
+    fake_mod = MagicMock()
+    instance = MagicMock()
+    fake_mod.Controller.return_value = instance
+    with patch("app._pynput_keyboard", return_value=fake_mod):
         yield instance
 
 
