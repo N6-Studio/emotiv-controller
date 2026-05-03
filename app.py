@@ -20,6 +20,13 @@ from core import (
     compute_motion_movements,
     mental_command_to_sets,
 )
+from update_service import (
+    apply_staged_update,
+    check_update_available,
+    download_and_verify,
+    get_app_version,
+    get_update_manifest_url,
+)
 
 
 load_dotenv()
@@ -472,6 +479,7 @@ class App(tk.Tk):
 
         self.connection_failed = False
         self.retry_button = None
+        self._update_check_in_progress = False
 
         self.configure(bg=UI["bg_outer"])
 
@@ -864,6 +872,13 @@ class App(tk.Tk):
             self.show_settings_view,
             width=14,
         ).pack(side="left")
+
+        self._make_button(
+            btn_bar,
+            "Check for updates",
+            self._on_check_for_updates,
+            width=18,
+        ).pack(side="left", padx=(8, 0))
 
         main_body = tk.Frame(self.content, bg=UI["bg_panel"])
         main_body.pack(side="top", fill="both", expand=True)
@@ -1622,6 +1637,94 @@ class App(tk.Tk):
 
         self.update_ui()
         self.after(30, self.tick)
+
+    def _on_check_for_updates(self):
+        if self._update_check_in_progress:
+            return
+        if not getattr(sys, "frozen", False):
+            messagebox.showinfo(
+                "Check for updates",
+                "In-app updates apply only to the packaged Windows executable.",
+            )
+            return
+        if sys.platform != "win32":
+            messagebox.showinfo(
+                "Check for updates",
+                "In-app updates are only supported on Windows.",
+            )
+            return
+        if not get_update_manifest_url():
+            messagebox.showinfo(
+                "Check for updates",
+                "Updates are not configured for this build.",
+            )
+            return
+        self._update_check_in_progress = True
+
+        def work():
+            try:
+                url = get_update_manifest_url()
+                is_newer, manifest, err = check_update_available(url)
+                self.after(
+                    0,
+                    lambda i=is_newer, m=dict(manifest), er=err: self._update_check_finished(
+                        i, m, er
+                    ),
+                )
+            except Exception as e:
+                self.after(
+                    0,
+                    lambda ex=str(e): self._update_check_finished(False, {}, ex),
+                )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_check_finished(self, is_newer, manifest, err):
+        self._update_check_in_progress = False
+        if err:
+            messagebox.showerror("Check for updates", f"Update check failed:\n{err}")
+            return
+        if not is_newer:
+            ch = manifest.get("version", "?")
+            messagebox.showinfo(
+                "Check for updates",
+                f"You are up to date.\n\nInstalled: {get_app_version()}\n"
+                f"Update channel: {ch}",
+            )
+            return
+        latest = manifest["version"]
+        if not messagebox.askyesno(
+            "Check for updates",
+            f"Version {latest} is available (you have {get_app_version()}).\n\n"
+            "Download and install now? The app will close and restart.",
+        ):
+            return
+        self._update_check_in_progress = True
+
+        def download_work():
+            try:
+                staged = download_and_verify(manifest)
+                apply_staged_update(staged)
+                self.after(0, self._update_install_queued_exit)
+            except Exception as e:
+                self.after(0, lambda e=e: self._update_download_failed(str(e)))
+
+        threading.Thread(target=download_work, daemon=True).start()
+
+    def _update_download_failed(self, msg):
+        self._update_check_in_progress = False
+        messagebox.showerror(
+            "Check for updates",
+            f"Download or install failed:\n{msg}",
+        )
+
+    def _update_install_queued_exit(self):
+        self._update_check_in_progress = False
+        messagebox.showinfo(
+            "Check for updates",
+            "The update is ready. This window will close and the app will restart automatically.",
+        )
+        os._exit(0)
 
     def on_close(self):
         self.sim_keyboard.release_all(self.config_data)
