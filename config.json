@@ -9,7 +9,7 @@
     "backward": 5.0,
     "right": 5.0
   },
-  "keyboard_enabled": false,
+  "keyboard_enabled": true,
   "com_power_threshold": 0.25,
   "key_bindings": {
     "forward": "w",

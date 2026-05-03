@@ -30,8 +30,14 @@
 .PARAMETER TimestampUrl
     RFC3161 timestamp server (DigiCert is widely used).
 
+.PARAMETER Debug
+    PyInstaller builds with a console window (stdout/stderr). Omit for a windowed EXE (no console).
+
 .EXAMPLE
     .\build-and-sign.ps1 -SkipSign
+
+.EXAMPLE
+    .\build-and-sign.ps1 -SkipSign -Debug
 
 .EXAMPLE
     .\build-and-sign.ps1 -CertThumbprint "A1B2C3..." -TimestampUrl "http://timestamp.digicert.com"
@@ -40,11 +46,12 @@
     .\build-and-sign.ps1 -PfxPath "D:\certs\codesign.pfx"
     # You will be prompted for the PFX password unless you pass -PfxPassword (not recommended in scripts).
 #>
-[CmdletBinding()]
 param(
     [string] $RepoRoot = "",
 
     [switch] $SkipSign,
+
+    [switch] $Debug,
 
     [string] $PfxPath,
 
@@ -57,6 +64,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+# Pip often emits benign warnings on stderr; PS 7.4+ can treat that as a terminating error with -Stop.
+if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
 
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if ($RepoRoot) {
@@ -123,9 +134,27 @@ try {
 
     if ($LASTEXITCODE -ne 0) { Write-Error "pip install pyinstaller failed." }
 
-    Write-Host "Building EXE with PyInstaller..." -ForegroundColor Cyan
-    & $pythonCmd.Exe @($pythonCmd.ArgsPrefix + @("-m", "PyInstaller", "--noconfirm", "--clean", "app.spec"))
-    if ($LASTEXITCODE -ne 0) { Write-Error "PyInstaller failed." }
+    $prevEmotivPyiDebug = $env:EMOTIV_PYI_DEBUG
+    try {
+        $env:EMOTIV_PYI_DEBUG = if ($Debug) { "1" } else { "0" }
+        if ($Debug) {
+            Write-Host "PyInstaller: console enabled (-Debug)." -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "PyInstaller: windowed (no console)." -ForegroundColor Cyan
+        }
+        Write-Host "Building EXE with PyInstaller..." -ForegroundColor Cyan
+        & $pythonCmd.Exe @($pythonCmd.ArgsPrefix + @("-m", "PyInstaller", "--noconfirm", "--clean", "app.spec"))
+        if ($LASTEXITCODE -ne 0) { Write-Error "PyInstaller failed." }
+    }
+    finally {
+        if ($null -eq $prevEmotivPyiDebug) {
+            Remove-Item Env:\EMOTIV_PYI_DEBUG -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:EMOTIV_PYI_DEBUG = $prevEmotivPyiDebug
+        }
+    }
 }
 finally {
     Pop-Location

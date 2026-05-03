@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 
+# Set by scripts/build-and-sign.ps1: '1' = console for debugging; default = windowed (no console).
+_emotiv_console = os.environ.get("EMOTIV_PYI_DEBUG", "0").strip().lower() in ("1", "true", "yes")
 
 a = Analysis(
     ['app.py'],
@@ -29,7 +32,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=_emotiv_console,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

@@ -1,6 +1,7 @@
 import json
 import os
 import ssl
+import sys
 import threading
 import time
 from dataclasses import dataclass, asdict, field
@@ -29,6 +30,35 @@ DEBIT = int(os.getenv("EMOTIV_DEBIT", "1"))
 
 DEFAULT_THRESHOLD = 5.0
 DEFAULT_COM_POWER_THRESHOLD = float(os.getenv("COM_POWER_THRESHOLD", "0.25"))
+
+UI = {
+    "bg_outer": "#0a0a0c",
+    "bg_panel": "#141418",
+    "bg_canvas": "#0a0a0c",
+    "text": "#f4f4f5",
+    "text_muted": "#a1a1aa",
+    "text_dim": "#71717a",
+    "accent": "#2dd4bf",
+    "accent_strong": "#14b8a6",
+    "pad_idle_bg": "#27272a",
+    "pad_active_bg": "#0d9488",
+    "pad_active_fg": "#ffffff",
+    "border": "#3f3f46",
+    "btn_neutral_bg": "#3f3f46",
+    "btn_neutral_active": "#52525b",
+    "btn_primary_bg": "#0d9488",
+    "btn_primary_active": "#0f766e",
+    "crosshair": "#52525b",
+    "dot": "#2dd4bf",
+    "error": "#f87171",
+}
+
+
+def ui_font(size: int, bold: bool = False):
+    if bold:
+        return ("Segoe UI", size, "bold")
+    return ("Segoe UI", size)
+
 
 MOVEMENTS = {
     "forward": {
@@ -320,9 +350,11 @@ class App(tk.Tk):
         super().__init__()
 
         self.title("EMOTIV Movimenti")
-        self.geometry("420x460")
-        self.minsize(420, 460)
-        self.maxsize(520, 560)
+        self.minsize(360, 400)
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        init_w = max(420, min(560, int(sw * 0.28)))
+        init_h = max(460, min(720, int(sh * 0.55)))
+        self.geometry(f"{init_w}x{init_h}")
 
         self.config_data = load_config()
         self.sim_keyboard = SimulatedKeyboard()
@@ -344,24 +376,41 @@ class App(tk.Tk):
         self.current_view = None
         self.movement_buttons = {}
 
-        self.configure(bg="#111111")
+        self.configure(bg=UI["bg_outer"])
 
         self.canvas = tk.Canvas(
             self,
-            width=420,
-            height=460,
-            bg="#111111",
+            bg=UI["bg_canvas"],
             highlightthickness=0,
         )
         self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
 
-        self.content = tk.Frame(self, bg="#171717")
-        self.content.place(relx=0.5, rely=0.5, anchor="center", width=370, height=410)
+        self.content = tk.Frame(
+            self.canvas,
+            bg=UI["bg_panel"],
+            highlightthickness=1,
+            highlightbackground=UI["border"],
+            highlightcolor=UI["border"],
+        )
+        cw0 = max(int(init_w * 0.94), 200)
+        ch0 = max(int(init_h * 0.94), 200)
+        self._content_window_id = self.canvas.create_window(
+            init_w // 2,
+            init_h // 2,
+            window=self.content,
+            anchor="center",
+            width=cw0,
+            height=ch0,
+        )
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.content.bind("<Configure>", self._on_content_configure)
+
+        self._setup_ttk_styles()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.start_shortcut_listener()
         self.show_main_view()
+        self.start_shortcut_listener()
 
         self.cortex = CortexClient(
             on_stream=lambda msg: self.stream_queue.put(msg),
@@ -372,83 +421,305 @@ class App(tk.Tk):
 
         self.after(30, self.tick)
 
-    def start_shortcut_listener(self):
-        def toggle():
-            self.config_data.keyboard_enabled = not self.config_data.keyboard_enabled
-            save_config(self.config_data)
-            self.status_queue.put(
-                "Tastiera simulata attiva"
-                if self.config_data.keyboard_enabled
-                else "Tastiera simulata disattivata"
-            )
+    def _setup_ttk_styles(self):
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure(
+            "Dark.TSpinbox",
+            fieldbackground=UI["pad_idle_bg"],
+            background=UI["btn_neutral_bg"],
+            foreground=UI["text"],
+            bordercolor=UI["border"],
+            lightcolor=UI["border"],
+            darkcolor=UI["border"],
+            arrowcolor=UI["text_muted"],
+            insertcolor=UI["text"],
+        )
+        style.map(
+            "Dark.TSpinbox",
+            fieldbackground=[("readonly", UI["pad_idle_bg"])],
+        )
 
+    def _make_button(
+        self,
+        parent,
+        text: str,
+        command: Callable[[], None],
+        *,
+        primary: bool = False,
+        width: Optional[int] = None,
+    ) -> tk.Button:
+        if primary:
+            kw = {
+                "bg": UI["btn_primary_bg"],
+                "fg": "#fafafa",
+                "activebackground": UI["btn_primary_active"],
+                "activeforeground": "#fafafa",
+            }
+        else:
+            kw = {
+                "bg": UI["btn_neutral_bg"],
+                "fg": UI["text"],
+                "activebackground": UI["btn_neutral_active"],
+                "activeforeground": UI["text"],
+            }
+        btn = tk.Button(
+            parent,
+            text=text,
+            command=command,
+            relief="flat",
+            bd=0,
+            padx=18,
+            pady=9,
+            cursor="hand2",
+            font=ui_font(10, True),
+            highlightthickness=0,
+            **kw,
+        )
+        if width is not None:
+            btn.config(width=width)
+        return btn
+
+    def _toggle_keyboard_via_shortcut(self):
+        self.config_data.keyboard_enabled = not self.config_data.keyboard_enabled
+        save_config(self.config_data)
+        self.status_queue.put(
+            "Tastiera simulata attiva"
+            if self.config_data.keyboard_enabled
+            else "Tastiera simulata disattivata"
+        )
+
+    def _install_pynput_hotkey(self):
         self.hotkey_listener = pynput_keyboard.GlobalHotKeys({
-            "<ctrl>+<shift>+k": toggle,
+            "<ctrl>+<shift>+k": lambda: self.after(0, self._toggle_keyboard_via_shortcut),
         })
         self.hotkey_listener.start()
+
+    def _install_win32_hotkey(self) -> bool:
+        if sys.platform != "win32":
+            return False
+
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+        WM_HOTKEY = 0x0312
+        MOD_CONTROL = 0x0002
+        MOD_SHIFT = 0x0004
+        GWL_WNDPROC = -4
+        VK_K = 0x4B
+        hotkey_id = 0x4D42
+
+        self.update_idletasks()
+        hwnd = wintypes.HWND(int(self.winfo_id()))
+        if not hwnd:
+            return False
+
+        if not user32.RegisterHotKey(hwnd, hotkey_id, MOD_CONTROL | MOD_SHIFT, VK_K):
+            return False
+
+        LRESULT = ctypes.c_longlong
+        WNDPROC = ctypes.WINFUNCTYPE(
+            LRESULT,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        )
+
+        user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetWindowLongPtrW.restype = wintypes.LONG_PTR
+        user32.SetWindowLongPtrW.argtypes = [
+            wintypes.HWND,
+            ctypes.c_int,
+            WNDPROC,
+        ]
+        user32.SetWindowLongPtrW.restype = wintypes.LONG_PTR
+        user32.CallWindowProcW.argtypes = [
+            wintypes.LONG_PTR,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.CallWindowProcW.restype = LRESULT
+
+        old_wndproc = user32.GetWindowLongPtrW(hwnd, GWL_WNDPROC)
+        if not old_wndproc:
+            user32.UnregisterHotKey(hwnd, hotkey_id)
+            return False
+
+        app = self
+
+        @WNDPROC
+        def hotkey_wndproc(hwnd_cb, msg, wparam, lparam):
+            if msg == WM_HOTKEY and wparam == hotkey_id:
+                app.after(0, app._toggle_keyboard_via_shortcut)
+                return 0
+            return user32.CallWindowProcW(
+                old_wndproc, hwnd_cb, msg, wparam, lparam
+            )
+
+        user32.SetWindowLongPtrW(hwnd, GWL_WNDPROC, hotkey_wndproc)
+
+        self._win_hotkey_hwnd = hwnd
+        self._win_hotkey_id = hotkey_id
+        self._win_hotkey_old_wndproc = old_wndproc
+        self._win_hotkey_wndproc = hotkey_wndproc
+        return True
+
+    def start_shortcut_listener(self):
+        self.hotkey_listener = None
+        self._win_hotkey_hwnd = None
+        self._win_hotkey_id = None
+        self._win_hotkey_old_wndproc = None
+        self._win_hotkey_wndproc = None
+
+        def try_install():
+            if self._install_win32_hotkey():
+                return
+            self._install_pynput_hotkey()
+
+        self.after_idle(try_install)
 
     def clear_content(self):
         for child in self.content.winfo_children():
             child.destroy()
+        self.calibration_instruction_label = None
+
+    def _on_canvas_configure(self, event):
+        if event.widget is not self.canvas:
+            return
+        w = max(event.width, 1)
+        h = max(event.height, 1)
+        cw = max(int(w * 0.94), 200)
+        ch = max(int(h * 0.94), 200)
+        self.canvas.coords(self._content_window_id, w // 2, h // 2)
+        self.canvas.itemconfig(self._content_window_id, width=cw, height=ch)
+
+    def _on_content_configure(self, event):
+        if event.widget is not self.content:
+            return
+        w = self.content.winfo_width()
+        h = self.content.winfo_height()
+        if w < 24 or h < 24:
+            return
+
+        lab = getattr(self, "calibration_instruction_label", None)
+        if lab is not None:
+            try:
+                if lab.winfo_exists():
+                    lab.config(wraplength=max(160, w - 48))
+            except tk.TclError:
+                self.calibration_instruction_label = None
+
+        err = getattr(self, "error_label", None)
+        if err is not None and self.current_view == "main":
+            try:
+                if err.winfo_exists():
+                    err.config(wraplength=max(120, w - 64))
+            except tk.TclError:
+                pass
+
+        scale = min(w / 380.0, h / 420.0)
+        scale = max(0.85, min(scale, 2.4))
+        pad_w = max(5, int(6 * scale))
+        pad_h = max(2, int(3 * scale))
+        btn_font = ("Segoe UI", max(11, int(16 * scale)), "bold")
+        for btn in self.movement_buttons.values():
+            try:
+                if btn.winfo_exists():
+                    btn.config(width=pad_w, height=pad_h, font=btn_font)
+            except tk.TclError:
+                pass
+
+        if self.current_view == "calibration" and hasattr(self, "timer_label"):
+            try:
+                if self.timer_label.winfo_exists():
+                    self.timer_label.config(
+                        font=("Segoe UI", max(22, int(48 * scale)), "bold"),
+                    )
+            except tk.TclError:
+                pass
 
     def show_main_view(self):
         self.current_view = "main"
         self.calibration_active = False
         self.clear_content()
 
-        tk.Label(
-            self.content,
-            text="Controllo movimenti",
-            fg="white",
-            bg="#171717",
-            font=("Arial", 18, "bold"),
-        ).pack(pady=(18, 4))
+        error_bar = tk.Frame(self.content, bg=UI["bg_panel"])
+        error_bar.pack(side="bottom", fill="x", padx=16, pady=(4, 12))
+
+        self.error_label = tk.Label(
+            error_bar,
+            text="",
+            fg=UI["error"],
+            bg=UI["bg_panel"],
+            font=ui_font(10),
+            justify="center",
+            wraplength=320,
+        )
+        self.error_label.pack(anchor="center")
+
+        top_bar = tk.Frame(self.content, bg=UI["bg_panel"])
+        top_bar.pack(side="top", fill="x", padx=12, pady=(12, 10))
+
+        info_col = tk.Frame(top_bar, bg=UI["bg_panel"])
+        info_col.pack(side="left", fill="x", expand=True)
 
         self.status_label = tk.Label(
-            self.content,
+            info_col,
             text="Connessione...",
-            fg="#bbbbbb",
-            bg="#171717",
-            font=("Arial", 10),
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(10),
         )
-        self.status_label.pack(pady=(0, 8))
+        self.status_label.pack(anchor="w")
 
         self.xy_label = tk.Label(
-            self.content,
+            info_col,
             text="x=0 · y=0",
-            fg="#dddddd",
-            bg="#171717",
-            font=("Arial", 11),
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            font=ui_font(11),
         )
-        self.xy_label.pack(pady=(0, 10))
+        self.xy_label.pack(anchor="w", pady=(4, 0))
 
-        self.create_movement_pad(self.content)
+        btn_bar = tk.Frame(top_bar, bg=UI["bg_panel"])
+        btn_bar.pack(side="right", anchor="n")
 
-        button_row = tk.Frame(self.content, bg="#171717")
-        button_row.pack(pady=16)
-
-        tk.Button(
-            button_row,
-            text="Inizializza",
-            command=self.show_calibration_view,
+        self._make_button(
+            btn_bar,
+            "Inizializza",
+            self.show_calibration_view,
+            primary=True,
             width=14,
-        ).grid(row=0, column=0, padx=5)
+        ).pack(side="left", padx=(0, 8))
 
-        tk.Button(
-            button_row,
-            text="Impostazioni",
-            command=self.show_settings_view,
+        self._make_button(
+            btn_bar,
+            "Impostazioni",
+            self.show_settings_view,
             width=14,
-        ).grid(row=0, column=1, padx=5)
+        ).pack(side="left")
+
+        main_body = tk.Frame(self.content, bg=UI["bg_panel"])
+        main_body.pack(side="top", fill="both", expand=True)
+
+        self.create_movement_pad(main_body)
 
         self.keyboard_label = tk.Label(
-            self.content,
+            main_body,
             text="",
-            fg="#bbbbbb",
-            bg="#171717",
-            font=("Arial", 10),
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(10),
         )
-        self.keyboard_label.pack(pady=(2, 0))
+        self.keyboard_label.pack(pady=(8, 14))
 
     def show_calibration_view(self):
         self.current_view = "calibration"
@@ -461,42 +732,43 @@ class App(tk.Tk):
         tk.Label(
             self.content,
             text="Inizializzazione",
-            fg="white",
-            bg="#171717",
-            font=("Arial", 18, "bold"),
-        ).pack(pady=(24, 8))
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            font=ui_font(20, True),
+        ).pack(pady=(28, 10))
 
-        tk.Label(
+        self.calibration_instruction_label = tk.Label(
             self.content,
             text="Resta in posizione neutra per 10 secondi.",
-            fg="#dddddd",
-            bg="#171717",
-            font=("Arial", 11),
-            wraplength=320,
-        ).pack(pady=(0, 18))
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(11),
+            wraplength=max(160, self.content.winfo_width() - 48),
+        )
+        self.calibration_instruction_label.pack(pady=(0, 20))
 
         self.timer_label = tk.Label(
             self.content,
             text="10",
-            fg="#7CFC98",
-            bg="#171717",
-            font=("Arial", 48, "bold"),
+            fg=UI["accent"],
+            bg=UI["bg_panel"],
+            font=("Segoe UI", 48, "bold"),
         )
-        self.timer_label.pack(pady=(0, 12))
+        self.timer_label.pack(pady=(0, 14))
 
         self.calibration_xy_label = tk.Label(
             self.content,
             text="x medio=0 · y medio=0",
-            fg="#bbbbbb",
-            bg="#171717",
-            font=("Arial", 11),
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(11),
         )
-        self.calibration_xy_label.pack(pady=(0, 20))
+        self.calibration_xy_label.pack(pady=(0, 24))
 
-        tk.Button(
+        self._make_button(
             self.content,
-            text="Annulla",
-            command=self.show_main_view,
+            "Annulla",
+            self.show_main_view,
             width=16,
         ).pack()
 
@@ -508,54 +780,55 @@ class App(tk.Tk):
         tk.Label(
             self.content,
             text="Verifica configurazione",
-            fg="white",
-            bg="#171717",
-            font=("Arial", 17, "bold"),
-        ).pack(pady=(18, 4))
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            font=ui_font(19, True),
+        ).pack(pady=(22, 8))
 
         self.review_xy_label = tk.Label(
             self.content,
             text="x=0 · y=0",
-            fg="#dddddd",
-            bg="#171717",
-            font=("Arial", 11),
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            font=ui_font(11),
         )
         self.review_xy_label.pack(pady=(0, 6))
 
         self.review_neutral_label = tk.Label(
             self.content,
             text=f"Neutro x={self.pending_neutral_x:.2f} · y={self.pending_neutral_y:.2f}",
-            fg="#bbbbbb",
-            bg="#171717",
-            font=("Arial", 10),
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(10),
         )
-        self.review_neutral_label.pack(pady=(0, 8))
+        self.review_neutral_label.pack(pady=(0, 10))
 
         self.create_movement_pad(self.content)
 
-        button_row = tk.Frame(self.content, bg="#171717")
-        button_row.pack(pady=16)
+        button_row = tk.Frame(self.content, bg=UI["bg_panel"])
+        button_row.pack(pady=18)
 
-        tk.Button(
+        self._make_button(
             button_row,
-            text="Annulla",
-            command=self.show_main_view,
+            "Annulla",
+            self.show_main_view,
             width=10,
-        ).grid(row=0, column=0, padx=4)
+        ).grid(row=0, column=0, padx=5)
 
-        tk.Button(
+        self._make_button(
             button_row,
-            text="Salva",
-            command=self.save_calibration,
+            "Salva",
+            self.save_calibration,
+            primary=True,
             width=10,
-        ).grid(row=0, column=1, padx=4)
+        ).grid(row=0, column=1, padx=5)
 
-        tk.Button(
+        self._make_button(
             button_row,
-            text="Riprova",
-            command=self.show_calibration_view,
+            "Riprova",
+            self.show_calibration_view,
             width=10,
-        ).grid(row=0, column=2, padx=4)
+        ).grid(row=0, column=2, padx=5)
 
     def show_settings_view(self):
         self.current_view = "settings"
@@ -564,10 +837,10 @@ class App(tk.Tk):
         tk.Label(
             self.content,
             text="Impostazioni",
-            fg="white",
-            bg="#171717",
-            font=("Arial", 18, "bold"),
-        ).pack(pady=(20, 14))
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            font=ui_font(20, True),
+        ).pack(pady=(24, 16))
 
         keyboard_var = tk.BooleanVar(value=self.config_data.keyboard_enabled)
 
@@ -575,24 +848,24 @@ class App(tk.Tk):
             self.content,
             text="Abilita tastiera simulata",
             variable=keyboard_var,
-            fg="white",
-            bg="#171717",
-            selectcolor="#171717",
-            activebackground="#171717",
-            activeforeground="white",
-            font=("Arial", 11),
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            selectcolor=UI["pad_idle_bg"],
+            activebackground=UI["bg_panel"],
+            activeforeground=UI["text"],
+            font=ui_font(11),
         )
         keyboard_check.pack(anchor="w", padx=34, pady=(0, 8))
 
         tk.Label(
             self.content,
             text="Scorciatoia: Ctrl + Shift + K",
-            fg="#bbbbbb",
-            bg="#171717",
-            font=("Arial", 10),
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(10),
         ).pack(anchor="w", padx=38, pady=(0, 16))
 
-        form = tk.Frame(self.content, bg="#171717")
+        form = tk.Frame(self.content, bg=UI["bg_panel"])
         form.pack(pady=4)
 
         threshold_global_var = tk.BooleanVar(value=self.config_data.threshold_global)
@@ -601,27 +874,27 @@ class App(tk.Tk):
             form,
             text="Soglia unica per tutti i movimenti",
             variable=threshold_global_var,
-            fg="white",
-            bg="#171717",
-            selectcolor="#171717",
-            activebackground="#171717",
-            activeforeground="white",
-            font=("Arial", 11),
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            selectcolor=UI["pad_idle_bg"],
+            activebackground=UI["bg_panel"],
+            activeforeground=UI["text"],
+            font=ui_font(11),
         )
         global_threshold_cb.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 4))
 
-        threshold_inner = tk.Frame(form, bg="#171717")
+        threshold_inner = tk.Frame(form, bg=UI["bg_panel"])
         threshold_inner.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=4)
 
         threshold_var = tk.DoubleVar(value=self.config_data.threshold)
 
-        global_thr_row = tk.Frame(threshold_inner, bg="#171717")
+        global_thr_row = tk.Frame(threshold_inner, bg=UI["bg_panel"])
         tk.Label(
             global_thr_row,
             text="Soglia movimenti",
-            fg="white",
-            bg="#171717",
-            font=("Arial", 11),
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            font=ui_font(11),
         ).grid(row=0, column=0, sticky="w", padx=6, pady=8)
         threshold_spin = ttk.Spinbox(
             global_thr_row,
@@ -630,10 +903,11 @@ class App(tk.Tk):
             increment=0.5,
             textvariable=threshold_var,
             width=8,
+            style="Dark.TSpinbox",
         )
         threshold_spin.grid(row=0, column=1, padx=6, pady=8)
 
-        per_thr_frame = tk.Frame(threshold_inner, bg="#171717")
+        per_thr_frame = tk.Frame(threshold_inner, bg=UI["bg_panel"])
         per_movement_vars: dict[str, tk.DoubleVar] = {}
         for i, movement in enumerate(MOVEMENTS):
             per_movement_vars[movement] = tk.DoubleVar(
@@ -642,9 +916,9 @@ class App(tk.Tk):
             tk.Label(
                 per_thr_frame,
                 text=f"Soglia {MOVEMENTS[movement]['ui_name']} ({MOVEMENTS[movement]['label']})",
-                fg="white",
-                bg="#171717",
-                font=("Arial", 11),
+                fg=UI["text"],
+                bg=UI["bg_panel"],
+                font=ui_font(11),
             ).grid(row=i, column=0, sticky="w", padx=6, pady=6)
             spin = ttk.Spinbox(
                 per_thr_frame,
@@ -653,6 +927,7 @@ class App(tk.Tk):
                 increment=0.5,
                 textvariable=per_movement_vars[movement],
                 width=8,
+                style="Dark.TSpinbox",
             )
             spin.grid(row=i, column=1, padx=6, pady=6)
 
@@ -670,9 +945,9 @@ class App(tk.Tk):
         tk.Label(
             form,
             text="Soglia potenza com",
-            fg="white",
-            bg="#171717",
-            font=("Arial", 11),
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            font=ui_font(11),
         ).grid(row=2, column=0, sticky="w", padx=6, pady=8)
 
         com_var = tk.DoubleVar(value=self.config_data.com_power_threshold)
@@ -684,6 +959,7 @@ class App(tk.Tk):
             increment=0.05,
             textvariable=com_var,
             width=8,
+            style="Dark.TSpinbox",
         )
         com_spin.grid(row=2, column=1, padx=6, pady=8)
 
@@ -697,26 +973,27 @@ class App(tk.Tk):
             save_config(self.config_data)
             self.show_main_view()
 
-        button_row = tk.Frame(self.content, bg="#171717")
+        button_row = tk.Frame(self.content, bg=UI["bg_panel"])
         button_row.pack(pady=24)
 
-        tk.Button(
+        self._make_button(
             button_row,
-            text="Indietro",
-            command=self.show_main_view,
+            "Indietro",
+            self.show_main_view,
             width=12,
-        ).grid(row=0, column=0, padx=5)
+        ).grid(row=0, column=0, padx=6)
 
-        tk.Button(
+        self._make_button(
             button_row,
-            text="Salva",
-            command=save_settings,
+            "Salva",
+            save_settings,
+            primary=True,
             width=12,
-        ).grid(row=0, column=1, padx=5)
+        ).grid(row=0, column=1, padx=6)
 
     def create_movement_pad(self, parent):
-        pad = tk.Frame(parent, bg="#171717")
-        pad.pack(pady=6)
+        pad = tk.Frame(parent, bg=UI["bg_panel"])
+        pad.pack(pady=8)
 
         self.movement_buttons = {}
 
@@ -733,13 +1010,16 @@ class App(tk.Tk):
                 text=MOVEMENTS[movement]["label"],
                 width=6,
                 height=3,
-                bg="#333333",
-                fg="#999999",
-                font=("Arial", 16, "bold"),
-                relief="ridge",
-                bd=2,
+                bg=UI["pad_idle_bg"],
+                fg=UI["text_dim"],
+                font=("Segoe UI", 16, "bold"),
+                relief="flat",
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=UI["border"],
+                highlightcolor=UI["border"],
             )
-            btn.grid(row=pos[0], column=pos[1], padx=5, pady=5)
+            btn.grid(row=pos[0], column=pos[1], padx=6, pady=6)
             self.movement_buttons[movement] = btn
 
     def save_calibration(self):
@@ -854,9 +1134,17 @@ class App(tk.Tk):
 
         for movement, btn in self.movement_buttons.items():
             if movement in self.active_movements:
-                btn.config(bg="#16a34a", fg="white")
+                btn.config(
+                    bg=UI["pad_active_bg"],
+                    fg=UI["pad_active_fg"],
+                    highlightbackground=UI["accent_strong"],
+                )
             else:
-                btn.config(bg="#333333", fg="#999999")
+                btn.config(
+                    bg=UI["pad_idle_bg"],
+                    fg=UI["text_dim"],
+                    highlightbackground=UI["border"],
+                )
 
         if self.calibration_active:
             elapsed = time.time() - self.calibration_started_at
@@ -917,34 +1205,40 @@ class App(tk.Tk):
         px = cx + max(-max_radius_x, min(max_radius_x, dx * scale))
         py = cy + max(-max_radius_y, min(max_radius_y, dy * scale))
 
+        arm = max(16, min(width, height) // 22)
+        dot_r = max(6, min(width, height) // 55)
+
         self.canvas.create_line(
-            cx - 22,
+            cx - arm,
             cy,
-            cx + 22,
+            cx + arm,
             cy,
-            fill="#444444",
+            fill=UI["crosshair"],
             width=2,
             tags="crosshair",
         )
         self.canvas.create_line(
             cx,
-            cy - 22,
+            cy - arm,
             cx,
-            cy + 22,
-            fill="#444444",
+            cy + arm,
+            fill=UI["crosshair"],
             width=2,
             tags="crosshair",
         )
 
         self.canvas.create_oval(
-            px - 8,
-            py - 8,
-            px + 8,
-            py + 8,
-            fill="#7CFC98",
-            outline="",
+            px - dot_r,
+            py - dot_r,
+            px + dot_r,
+            py + dot_r,
+            fill=UI["dot"],
+            outline=UI["accent_strong"],
+            width=1,
             tags="crosshair",
         )
+
+        self.canvas.tag_raise("crosshair", self._content_window_id)
 
     def tick(self):
         try:
@@ -959,14 +1253,16 @@ class App(tk.Tk):
                 status = self.status_queue.get_nowait()
                 if hasattr(self, "status_label"):
                     self.status_label.config(text=status)
+                if hasattr(self, "error_label"):
+                    self.error_label.config(text="")
         except Empty:
             pass
 
         try:
             while True:
                 error = self.error_queue.get_nowait()
-                if hasattr(self, "status_label"):
-                    self.status_label.config(text=error)
+                if hasattr(self, "error_label"):
+                    self.error_label.config(text=error)
                 print(error)
         except Empty:
             pass
@@ -982,10 +1278,35 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        try:
-            self.hotkey_listener.stop()
-        except Exception:
-            pass
+        if getattr(self, "_win_hotkey_hwnd", None):
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            GWL_WNDPROC = -4
+            hwnd = self._win_hotkey_hwnd
+            try:
+                user32.UnregisterHotKey(hwnd, self._win_hotkey_id)
+            except Exception:
+                pass
+            try:
+                user32.SetWindowLongPtrW.argtypes = [
+                    wintypes.HWND,
+                    ctypes.c_int,
+                    wintypes.LONG_PTR,
+                ]
+                user32.SetWindowLongPtrW.restype = wintypes.LONG_PTR
+                user32.SetWindowLongPtrW(
+                    hwnd, GWL_WNDPROC, self._win_hotkey_old_wndproc
+                )
+            except Exception:
+                pass
+            self._win_hotkey_hwnd = None
+        elif self.hotkey_listener is not None:
+            try:
+                self.hotkey_listener.stop()
+            except Exception:
+                pass
 
         self.destroy()
 
