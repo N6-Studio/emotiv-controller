@@ -1,0 +1,13 @@
+{
+  "neutral_x": 70.12,
+  "neutral_y": -0.31,
+  "threshold": 5.0,
+  "keyboard_enabled": false,
+  "com_power_threshold": 0.25,
+  "key_bindings": {
+    "forward": "w",
+    "left": "a",
+    "backward": "s",
+    "right": "d"
+  }
+}
