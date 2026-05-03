@@ -15,7 +15,6 @@ def test_write_read_app_env_round_trip(tmp_path):
         "EMOTIV_CLIENT_SECRET": "secret1",
         "EMOTIV_LICENSE": "",
         "EMOTIV_DEBIT": "1",
-        "COM_POWER_THRESHOLD": "0.3",
     }
     app_module.write_app_env_file(path, values)
     loaded = app_module.read_app_env_file_dict(path)

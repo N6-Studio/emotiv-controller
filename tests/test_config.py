@@ -61,8 +61,8 @@ def test_appconfig_com_key_bindings_merge_blank():
         },
     )
     assert cfg.com_key_bindings["push"] == "x"
-    assert cfg.com_key_bindings["pull"] == "s"
-    assert cfg.com_key_bindings["left"] == "a"
+    assert cfg.com_key_bindings["pull"] == "e"
+    assert cfg.com_key_bindings["left"] == "r"
     assert cfg.com_key_bindings["right"] == "z"
 
 

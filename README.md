@@ -45,7 +45,6 @@ EMOTIV_LICENSE=
 EMOTIV_DEBIT=1
 CORTEX_URL=wss://localhost:6868
 STREAMS=mot,com
-COM_POWER_THRESHOLD=0.25
 ```
 
 | Variable | Meaning |
@@ -55,7 +54,6 @@ COM_POWER_THRESHOLD=0.25
 | `EMOTIV_DEBIT` | Session debit flag (default `1`). |
 | `CORTEX_URL` | Cortex WebSocket URL (default local Cortex). |
 | `STREAMS` | Comma-separated Cortex streams; `mot` = motion, `com` = mental commands. Use `mot` only if you do not need mental commands. |
-| `COM_POWER_THRESHOLD` | Default mental-command power threshold (also editable in the app). |
 
 ### 2. Local settings (`config.json`)
 
@@ -63,6 +61,7 @@ On first run, the app creates or updates `config.json` in the **current working 
 
 - Calibrated **neutral** head pose (`neutral_x`, `neutral_y`)
 - **Threshold** for motion activation (global or per-direction)
+- **Mental command power threshold** (minimum COM signal strength to treat a command as active)
 - **Keyboard simulation** on/off
 - **Key bindings** for motion and mental commands
 
@@ -143,7 +142,7 @@ bash ./scripts/build.sh --skip-sign \
   --update-manifest-url "https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json"
 ```
 
-After the first successful release, users with that URL in the build can use **Check for updates** in the app.
+After the first successful release, users with that URL in the build can use **Check for updates** under **Settings**.
 
 ---
 
@@ -163,7 +162,7 @@ Or, with a venv already activated: `pytest`.
 |--------|----------------|
 | Cannot connect | Cortex running, `CORTEX_URL`, firewall, correct `.env` credentials. |
 | No motion | Headset streaming, calibration done, thresholds not too high. |
-| No mental commands | `STREAMS` includes `com`; trained profile in Cortex; `COM_POWER_THRESHOLD`. |
+| No mental commands | `STREAMS` includes `com`; trained profile in Cortex; mental-command power threshold in Settings / `config.json`. |
 | Keys not sent | “Keyboard simulation” enabled; OS permissions for accessibility/input monitoring where required. |
 | Wrong working directory | Run from `python/` so `config.json` and `.env` are found. |
 

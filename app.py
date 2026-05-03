@@ -44,7 +44,13 @@ load_dotenv(APP_ENV_PATH, override=True)
 CONFIG_PATH = Path("config.json")
 
 DEFAULT_THRESHOLD = 5.0
-DEFAULT_COM_POWER_THRESHOLD = float(os.getenv("COM_POWER_THRESHOLD", "0.25"))
+DEFAULT_COM_POWER_THRESHOLD = 0.25
+DEFAULT_COM_KEY_BINDINGS = {
+    "push": "q",
+    "pull": "e",
+    "left": "r",
+    "right": "f",
+}
 
 # Keys written to app.env by the environment settings UI (stable order).
 APP_ENV_UI_KEYS = [
@@ -54,7 +60,6 @@ APP_ENV_UI_KEYS = [
     "EMOTIV_CLIENT_SECRET",
     "EMOTIV_LICENSE",
     "EMOTIV_DEBIT",
-    "COM_POWER_THRESHOLD",
 ]
 
 
@@ -93,7 +98,6 @@ def app_env_form_values() -> dict[str, str]:
         "EMOTIV_CLIENT_SECRET": ce.client_secret or "",
         "EMOTIV_LICENSE": ce.license,
         "EMOTIV_DEBIT": str(ce.debit),
-        "COM_POWER_THRESHOLD": os.getenv("COM_POWER_THRESHOLD", "0.25"),
     }
 
 
@@ -224,12 +228,7 @@ class AppConfig:
             movement: float(self.movement_thresholds.get(movement, base))
             for movement in MOVEMENTS
         }
-        com_defaults = {
-            "push": self.key_bindings.get("forward", "w"),
-            "pull": self.key_bindings.get("backward", "s"),
-            "left": self.key_bindings.get("left", "a"),
-            "right": self.key_bindings.get("right", "d"),
-        }
+        com_defaults = dict(DEFAULT_COM_KEY_BINDINGS)
         if self.com_key_bindings is None:
             self.com_key_bindings = dict(com_defaults)
         else:
@@ -986,13 +985,6 @@ class App(tk.Tk):
             width=14,
         ).pack(side="left")
 
-        self._make_button(
-            btn_bar,
-            "Check for updates",
-            self._on_check_for_updates,
-            width=18,
-        ).pack(side="left", padx=(8, 0))
-
         main_body = tk.Frame(self.content, bg=UI["bg_panel"])
         main_body.pack(side="top", fill="both", expand=True)
 
@@ -1346,12 +1338,7 @@ class App(tk.Tk):
         ).grid(row=5, column=0, columnspan=2, sticky="w", padx=6, pady=(14, 4))
 
         com_binding_vars: dict[str, tk.StringVar] = {}
-        com_binding_defaults = {
-            "push": self.config_data.key_bindings.get("forward", "w"),
-            "pull": self.config_data.key_bindings.get("backward", "s"),
-            "left": self.config_data.key_bindings.get("left", "a"),
-            "right": self.config_data.key_bindings.get("right", "d"),
-        }
+        com_binding_defaults = dict(DEFAULT_COM_KEY_BINDINGS)
         for i, cmd in enumerate(COM_MAPPED_MENTAL_ACTIONS):
             row = 6 + i
             tk.Label(
@@ -1400,6 +1387,15 @@ class App(tk.Tk):
             "Environment variables…",
             self.show_env_settings_view,
             width=26,
+        ).pack()
+
+        updates_row = tk.Frame(self.content, bg=UI["bg_panel"])
+        updates_row.pack(pady=(12, 0))
+        self._make_button(
+            updates_row,
+            "Check for updates",
+            self._on_check_for_updates,
+            width=18,
         ).pack()
 
         button_row = tk.Frame(self.content, bg=UI["bg_panel"])
@@ -1513,14 +1509,6 @@ class App(tk.Tk):
                 messagebox.showerror(
                     "Invalid value",
                     "EMOTIV_DEBIT must be an integer.",
-                )
-                return
-            try:
-                float(raw["COM_POWER_THRESHOLD"])
-            except ValueError:
-                messagebox.showerror(
-                    "Invalid value",
-                    "COM_POWER_THRESHOLD must be a number.",
                 )
                 return
 

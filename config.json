@@ -18,9 +18,9 @@
     "right": "d"
   },
   "com_key_bindings": {
-    "push": "w",
-    "pull": "s",
-    "left": "a",
-    "right": "d"
+    "push": "q",
+    "pull": "e",
+    "left": "r",
+    "right": "f"
   }
 }
