@@ -54,6 +54,10 @@
 
 .EXAMPLE
     .\build-and-sign.ps1 -SkipSign -AppVersion "1.0.0" -UpdateManifestUrl "https://example.com/emotiv/latest.json"
+
+.EXAMPLE
+    # Stable manifest URL when releases are published via .github/workflows/release-windows.yml:
+    .\build-and-sign.ps1 -SkipSign -AppVersion "1.0.0" -UpdateManifestUrl "https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json"
 #>
 param(
     [string] $RepoRoot = "",

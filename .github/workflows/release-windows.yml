@@ -1,0 +1,86 @@
+# Build app.exe on a version tag and publish a GitHub Release with:
+#   - app.exe
+#   - latest.json  (version, download_url for this tag's app.exe, sha256)
+#
+# In-app updates: bake this URL when building (build-and-sign.ps1 -UpdateManifestUrl):
+#   https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json
+#
+# Trigger: push an annotated or lightweight tag matching v* (e.g. v1.2.3).
+
+name: Release Windows EXE
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Derive semver from tag
+        id: meta
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw "Empty ref_name" }
+          if ($tag.StartsWith("v", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $ver = $tag.Substring(1)
+          } else {
+            $ver = $tag
+          }
+          $repo = "${{ github.repository }}"
+          $manifestUrl = "https://github.com/$repo/releases/latest/download/latest.json"
+          $downloadUrl = "https://github.com/$repo/releases/download/$tag/app.exe"
+          @(
+            "version=$ver",
+            "manifest_url=$manifestUrl",
+            "download_url=$downloadUrl"
+          ) | Set-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8NoBOM
+
+      - name: Build PyInstaller EXE (unsigned in CI)
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.version }}
+          MANIFEST_URL: ${{ steps.meta.outputs.manifest_url }}
+        run: |
+          .\scripts\build-and-sign.ps1 -SkipSign -AppVersion $env:APP_VERSION -UpdateManifestUrl $env:MANIFEST_URL
+
+      - name: Write latest.json for this release
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.version }}
+          DOWNLOAD_URL: ${{ steps.meta.outputs.download_url }}
+        run: |
+          $sha = (Get-FileHash -LiteralPath "dist\app.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $obj = [ordered]@{
+            version      = $env:APP_VERSION
+            download_url = $env:DOWNLOAD_URL
+            sha256       = $sha
+          }
+          ($obj | ConvertTo-Json -Compress) | Set-Content -LiteralPath "latest.json" -Encoding utf8
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/app.exe
+            latest.json

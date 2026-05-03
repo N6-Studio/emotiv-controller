@@ -110,6 +110,24 @@ PyInstaller is configured in `app.spec`. From `python/scripts/`:
 
 Output is under `python/dist/`. See the script header for signing options (`signtool`) and debug console builds.
 
+### GitHub releases and updates
+
+Releases for [N6-Studio/emotiv-controller](https://github.com/N6-Studio/emotiv-controller) are built by GitHub Actions when you push a version tag matching `v*` (for example `v1.0.0`). The workflow is [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml): it builds `dist/app.exe`, writes `latest.json` (version, download URL for that tag’s `app.exe`, and SHA-256), and attaches both to the GitHub Release.
+
+Use this **stable manifest URL** when baking update checks into the shipped EXE:
+
+`https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json`
+
+Example (match `-AppVersion` to the tag you are shipping):
+
+```powershell
+.\build-and-sign.ps1 -SkipSign `
+  -AppVersion "1.0.0" `
+  -UpdateManifestUrl "https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json"
+```
+
+After the first successful release, users with that URL in the build can use **Check for updates** in the app.
+
 ---
 
 ## Tests
