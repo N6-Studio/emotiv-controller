@@ -543,6 +543,15 @@ class CortexClient(threading.Thread):
             self.ws_app.close()
 
 
+def _status_clears_connection_error_ui(status: str) -> bool:
+    """Main-view status line is shared with Cortex progress and local UI hints."""
+    if status.startswith("Simulated keyboard "):
+        return False
+    if status.startswith("Keyboard shortcut is "):
+        return False
+    return True
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -1844,17 +1853,18 @@ class App(tk.Tk):
                 status = self.status_queue.get_nowait()
                 if getattr(self, "status_label", None) is not None:
                     self.status_label.config(text=status)
-                err = getattr(self, "error_label", None)
-                if err is not None:
-                    err.config(text="")
-                self.connection_failed = False
-                rb = getattr(self, "retry_button", None)
-                if rb is not None:
-                    try:
-                        if rb.winfo_ismapped():
-                            rb.pack_forget()
-                    except tk.TclError:
-                        pass
+                if _status_clears_connection_error_ui(status):
+                    err = getattr(self, "error_label", None)
+                    if err is not None:
+                        err.config(text="")
+                    self.connection_failed = False
+                    rb = getattr(self, "retry_button", None)
+                    if rb is not None:
+                        try:
+                            if rb.winfo_ismapped():
+                                rb.pack_forget()
+                        except tk.TclError:
+                            pass
         except Empty:
             pass
 
