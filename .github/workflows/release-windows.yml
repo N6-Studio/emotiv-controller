@@ -5,7 +5,8 @@
 # In-app updates: bake this URL when building (scripts/build.sh --update-manifest-url):
 #   https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json
 #
-# Trigger: push an annotated or lightweight tag matching v* (e.g. v1.2.3).
+# Trigger: push a tag matching v* (e.g. v1.2.3), or workflow_dispatch with ref set
+# to that tag (used by tag-from-version.yml after a GITHUB_TOKEN tag push).
 # Runner: windows-latest (required for Windows PE). Shell: bash (Git Bash on the runner).
 
 name: Release Windows EXE
@@ -14,6 +15,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write

@@ -1,6 +1,6 @@
 # When VERSION changes on the default branch, create and push v{VERSION} if that
-# tag does not exist yet. Push must use RELEASE_TAG_PAT so the tag push triggers
-# release-windows.yml (GITHUB_TOKEN pushes do not start other workflows).
+# tag does not exist yet. Tag push uses GITHUB_TOKEN; release-windows.yml is then
+# started via workflow_dispatch (token pushes do not trigger on: push: tags).
 name: Tag from VERSION
 
 on:
@@ -11,7 +11,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  actions: write
 
 jobs:
   tag:
@@ -62,16 +63,19 @@ jobs:
       - name: Create and push tag
         if: steps.exists.outputs.exists == 'false'
         env:
-          RELEASE_TAG_PAT: ${{ secrets.RELEASE_TAG_PAT }}
           TAG_NAME: ${{ steps.ver.outputs.tag_name }}
         run: |
           set -euo pipefail
-          if [[ -z "${RELEASE_TAG_PAT:-}" ]]; then
-            echo "Secret RELEASE_TAG_PAT is not set. Add a PAT with contents:write so the tag push can trigger release-windows.yml." >&2
-            exit 1
-          fi
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git remote set-url origin "https://x-access-token:${RELEASE_TAG_PAT}@github.com/${GITHUB_REPOSITORY}.git"
           git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}" "${GITHUB_SHA}"
           git push origin "refs/tags/${TAG_NAME}"
+
+      - name: Start release workflow
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.ver.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-windows.yml --ref "${TAG_NAME}"

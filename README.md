@@ -117,14 +117,9 @@ Releases for [N6-Studio/emotiv-controller](https://github.com/N6-Studio/emotiv-c
 
 The repo root file [`VERSION`](VERSION) holds the semver string **without** a `v` prefix (for example `0.1.0` or `0.2.0-beta.1`). When that file changes on `main` or `master`, [`.github/workflows/tag-from-version.yml`](.github/workflows/tag-from-version.yml) runs: if `refs/tags/v{VERSION}` already exists on the remote, it exits successfully and does nothing; otherwise it creates an **annotated** tag on the pushed commit and pushes it.
 
-Pushes performed with the default `GITHUB_TOKEN` do not trigger other workflows, so the tag push uses a separate credential:
+The tag is pushed with the default **`GITHUB_TOKEN`**. Pushes with that token do not start workflows that only listen for `push` tags, so after a new tag is pushed the same job starts **Release Windows EXE** via **`workflow_dispatch`** (`gh workflow run … --ref` the new tag). No personal access token is required.
 
-1. Create a **classic** personal access token with the `repo` scope, or a **fine-grained** token with **Contents: Read and write** for this repository only.
-2. In the GitHub repo settings, add a secret named **`RELEASE_TAG_PAT`** with that token.
-
-Without `RELEASE_TAG_PAT`, the workflow fails when a new tag is needed (existing tags still skip cleanly with no secret use).
-
-You can still create tags manually with `git tag` / `git push`. To **retry** tag creation after a failed run without editing `VERSION`, use **Actions → Tag from VERSION → Run workflow**.
+You can still create tags manually with `git tag` / `git push`; that still triggers the release workflow on tag push. To **retry** tag creation after a failed run without editing `VERSION`, use **Actions → Tag from VERSION → Run workflow**.
 
 If a release build failed but the tag already exists, delete the tag (or bump `VERSION`) before expecting a new release; the automation will not move an existing tag.
 
