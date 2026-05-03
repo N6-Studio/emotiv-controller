@@ -1,6 +1,6 @@
-# Build app.exe on a version tag and publish a GitHub Release with:
-#   - app.exe
-#   - latest.json  (version, download_url for this tag's app.exe, sha256)
+# Build EmotivController.exe on a version tag and publish a GitHub Release with:
+#   - EmotivController.exe
+#   - latest.json  (version, download_url for this tag's EXE, sha256)
 #
 # In-app updates: bake this URL when building (scripts/build.sh --update-manifest-url):
 #   https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json
@@ -51,7 +51,7 @@ jobs:
           fi
           repo="${GITHUB_REPOSITORY}"
           manifest_url="https://github.com/${repo}/releases/latest/download/latest.json"
-          download_url="https://github.com/${repo}/releases/download/${tag}/app.exe"
+          download_url="https://github.com/${repo}/releases/download/${tag}/EmotivController.exe"
           {
             echo "version=${ver}"
             echo "manifest_url=${manifest_url}"
@@ -76,7 +76,7 @@ jobs:
           set -euo pipefail
           python -c "
           import hashlib, json, os, pathlib
-          exe = pathlib.Path('dist/app.exe')
+          exe = pathlib.Path('dist/EmotivController.exe')
           h = hashlib.sha256(exe.read_bytes()).hexdigest().lower()
           obj = {
               'version': os.environ['APP_VERSION'],
@@ -97,5 +97,5 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/app.exe
+            dist/EmotivController.exe
             latest.json

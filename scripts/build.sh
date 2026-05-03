@@ -85,7 +85,7 @@ else
 fi
 
 SPEC_PATH="$PYTHON_DIR/app.spec"
-DIST_EXE="$PYTHON_DIR/dist/app.exe"
+DIST_EXE="$PYTHON_DIR/dist/EmotivController.exe"
 
 if [[ "$SKIP_SIGN" -eq 0 ]] && [[ -z "$PFX_PATH" ]] && [[ -z "$CERT_THUMBPRINT" ]]; then
   echo "Provide signing credentials or skip signing explicitly:" >&2
