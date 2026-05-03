@@ -11,7 +11,6 @@ from typing import Callable, Optional
 
 import websocket
 from dotenv import load_dotenv
-from pynput import keyboard as pynput_keyboard
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -30,6 +29,14 @@ from update_service import (
 
 
 load_dotenv()
+
+
+def _pynput_keyboard():
+    """Import pynput only when needed (headless Linux cannot import it at module load)."""
+    from pynput import keyboard as pynput_keyboard
+
+    return pynput_keyboard
+
 
 APP_ENV_PATH = Path("app.env")
 load_dotenv(APP_ENV_PATH, override=True)
@@ -256,7 +263,7 @@ def save_config(config: AppConfig):
 
 class SimulatedKeyboard:
     def __init__(self):
-        self.controller = pynput_keyboard.Controller()
+        self.controller = _pynput_keyboard().Controller()
         self.pressed_movements = set()
         self.pressed_com_actions = set()
         self._key_refcount: dict[str, int] = {}
@@ -700,7 +707,7 @@ class App(tk.Tk):
         if self.hotkey_listener is not None:
             return
         cb = lambda: self.after(0, self._toggle_keyboard_via_shortcut)
-        self.hotkey_listener = pynput_keyboard.GlobalHotKeys({
+        self.hotkey_listener = _pynput_keyboard().GlobalHotKeys({
             "<ctrl>+<shift>+k": cb,
             "<ctrl>+<alt>+k": cb,
         })

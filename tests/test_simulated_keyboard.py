@@ -5,7 +5,7 @@ import pytest
 
 @pytest.fixture
 def keyboard_controller():
-    with patch("app.pynput_keyboard.Controller") as ctor_mock:
+    with patch("pynput.keyboard.Controller") as ctor_mock:
         instance = MagicMock()
         ctor_mock.return_value = instance
         yield instance
