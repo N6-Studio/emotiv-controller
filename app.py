@@ -15,6 +15,12 @@ from pynput import keyboard as pynput_keyboard
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from core import (
+    COM_MAPPED_MENTAL_ACTIONS,
+    compute_motion_movements,
+    mental_command_to_sets,
+)
+
 
 load_dotenv()
 
@@ -82,9 +88,6 @@ MOVEMENTS = {
         "default_key": "d",
     },
 }
-
-# Mental command actions mapped to movement (Cortex `com[0]` names).
-COM_MAPPED_MENTAL_ACTIONS = ("push", "pull", "left", "right")
 
 
 @dataclass
@@ -298,9 +301,15 @@ class CortexClient(threading.Thread):
         self.on_status("Connected to Cortex")
 
     def _on_close(self, ws, close_status_code, close_msg):
+        was_open = self.ws_open
         self.ws_open = False
         self.ws = None
-        self.on_status("Connection closed")
+        if self.stop_event.is_set():
+            return
+        if was_open:
+            self.on_error("Connection lost")
+        else:
+            self.on_status("Connection closed")
 
     def is_websocket_connected(self) -> bool:
         return self.ws_open
@@ -460,6 +469,9 @@ class App(tk.Tk):
         self.com_power_labels = None
         self.com_threshold_hint = None
         self._com_font_targets = None
+
+        self.connection_failed = False
+        self.retry_button = None
 
         self.configure(bg=UI["bg_outer"])
 
@@ -672,11 +684,38 @@ class App(tk.Tk):
         self.xy_label = None
         self.status_label = None
         self.error_label = None
+        self.retry_button = None
         self.keyboard_label = None
         self.movement_buttons = {}
         self.com_power_labels = None
         self.com_threshold_hint = None
         self._com_font_targets = None
+
+    def retry_connection(self):
+        try:
+            self.cortex.stop()
+        except Exception:
+            pass
+
+        self.connection_failed = False
+        if self.retry_button is not None:
+            try:
+                self.retry_button.pack_forget()
+            except tk.TclError:
+                pass
+        if self.error_label is not None:
+            try:
+                self.error_label.config(text="")
+            except tk.TclError:
+                pass
+
+        self.cortex = CortexClient(
+            on_stream=lambda msg: self.stream_queue.put(msg),
+            on_status=lambda msg: self.status_queue.put(msg),
+            on_error=lambda msg: self.error_queue.put(msg),
+        )
+        self.cortex.start()
+        self.status_queue.put("Reconnecting...")
 
     def _on_canvas_configure(self, event):
         if event.widget is not self.canvas:
@@ -774,6 +813,16 @@ class App(tk.Tk):
         )
         self.error_label.pack(anchor="center")
 
+        self.retry_button = self._make_button(
+            error_bar,
+            "Retry connection",
+            self.retry_connection,
+            primary=True,
+            width=18,
+        )
+        if self.connection_failed:
+            self.retry_button.pack(anchor="center", pady=(6, 0))
+
         top_bar = tk.Frame(self.content, bg=UI["bg_panel"])
         top_bar.pack(side="top", fill="x", padx=12, pady=(12, 10))
 
@@ -851,7 +900,7 @@ class App(tk.Tk):
             highlightbackground=UI["border"],
             highlightcolor=UI["border"],
         )
-        com_wrap.pack(side="left", padx=(14, 0))
+        com_wrap.pack(side="left", padx=(20, 0))
 
         title = tk.Label(
             com_wrap,
@@ -1311,52 +1360,25 @@ class App(tk.Tk):
     def map_motion(self, x: float, y: float) -> set:
         neutral_x = self.get_active_neutral_x()
         neutral_y = self.get_active_neutral_y()
-        cfg = self.config_data
-        if cfg.threshold_global:
-            t_fwd = t_back = t_left = t_right = float(cfg.threshold)
-        else:
-            m = cfg.movement_thresholds
-            t_fwd = float(m["forward"])
-            t_back = float(m["backward"])
-            t_left = float(m["left"])
-            t_right = float(m["right"])
-
         if neutral_x is None or neutral_y is None:
             return set()
-
-        movements = set()
-
-        if x <= neutral_x - t_fwd:
-            movements.add("forward")
-        elif x >= neutral_x + t_back:
-            movements.add("backward")
-
-        if y <= neutral_y - t_left:
-            movements.add("left")
-        elif y >= neutral_y + t_right:
-            movements.add("right")
-
-        return movements
+        cfg = self.config_data
+        return compute_motion_movements(
+            x,
+            y,
+            float(neutral_x),
+            float(neutral_y),
+            threshold_global=cfg.threshold_global,
+            threshold=float(cfg.threshold),
+            movement_thresholds=cfg.movement_thresholds,
+        )
 
     def map_mental_command(self, com: list) -> tuple[set, set]:
         """Returns (movement labels for the pad UI, mental actions for COM keys)."""
-        action = str(com[0] or "neutral").lower()
-        power = float(com[1] or 0)
-
-        if power < self.config_data.com_power_threshold:
-            return set(), set()
-
-        mapping = {
-            "push": "forward",
-            "pull": "backward",
-            "left": "left",
-            "right": "right",
-        }
-
-        movement = mapping.get(action)
-        if not movement:
-            return set(), set()
-        return {movement}, {action}
+        return mental_command_to_sets(
+            com,
+            power_threshold=float(self.config_data.com_power_threshold),
+        )
 
     def get_active_neutral_x(self):
         if self.current_view == "calibration_review" and self.pending_neutral_x is not None:
@@ -1569,6 +1591,14 @@ class App(tk.Tk):
                 err = getattr(self, "error_label", None)
                 if err is not None:
                     err.config(text="")
+                self.connection_failed = False
+                rb = getattr(self, "retry_button", None)
+                if rb is not None:
+                    try:
+                        if rb.winfo_ismapped():
+                            rb.pack_forget()
+                    except tk.TclError:
+                        pass
         except Empty:
             pass
 
@@ -1579,6 +1609,14 @@ class App(tk.Tk):
                 if err is not None:
                     err.config(text=error)
                 print(error)
+                self.connection_failed = True
+                rb = getattr(self, "retry_button", None)
+                if rb is not None:
+                    try:
+                        if not rb.winfo_ismapped():
+                            rb.pack(anchor="center", pady=(6, 0))
+                    except tk.TclError:
+                        pass
         except Empty:
             pass
 
