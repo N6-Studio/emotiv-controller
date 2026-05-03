@@ -549,9 +549,7 @@ class App(tk.Tk):
 
         self.title("EMOTIV Movement")
         self.minsize(360, 400)
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        init_w = max(420, min(560, int(sw * 0.28)))
-        init_h = max(460, min(720, int(sh * 0.55)))
+        init_w, init_h = 600, 400
         self.geometry(f"{init_w}x{init_h}")
 
         self.config_data = load_config()
