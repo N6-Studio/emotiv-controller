@@ -31,18 +31,113 @@ from update_service import (
 
 load_dotenv()
 
+APP_ENV_PATH = Path("app.env")
+load_dotenv(APP_ENV_PATH, override=True)
+
 CONFIG_PATH = Path("config.json")
-
-CORTEX_URL = os.getenv("CORTEX_URL", "wss://localhost:6868")
-STREAMS = [s.strip() for s in os.getenv("STREAMS", "mot").split(",") if s.strip()]
-
-CLIENT_ID = os.getenv("EMOTIV_CLIENT_ID")
-CLIENT_SECRET = os.getenv("EMOTIV_CLIENT_SECRET")
-LICENSE = os.getenv("EMOTIV_LICENSE", "")
-DEBIT = int(os.getenv("EMOTIV_DEBIT", "1"))
 
 DEFAULT_THRESHOLD = 5.0
 DEFAULT_COM_POWER_THRESHOLD = float(os.getenv("COM_POWER_THRESHOLD", "0.25"))
+
+# Keys written to app.env by the environment settings UI (stable order).
+APP_ENV_UI_KEYS = [
+    "CORTEX_URL",
+    "STREAMS",
+    "EMOTIV_CLIENT_ID",
+    "EMOTIV_CLIENT_SECRET",
+    "EMOTIV_LICENSE",
+    "EMOTIV_DEBIT",
+    "COM_POWER_THRESHOLD",
+]
+
+
+@dataclass
+class CortexEnv:
+    cortex_url: str
+    streams: list[str]
+    client_id: Optional[str]
+    client_secret: Optional[str]
+    license: str
+    debit: int
+
+
+def read_cortex_env() -> CortexEnv:
+    return CortexEnv(
+        cortex_url=os.getenv("CORTEX_URL", "wss://localhost:6868"),
+        streams=[
+            s.strip()
+            for s in os.getenv("STREAMS", "mot").split(",")
+            if s.strip()
+        ],
+        client_id=os.getenv("EMOTIV_CLIENT_ID"),
+        client_secret=os.getenv("EMOTIV_CLIENT_SECRET"),
+        license=os.getenv("EMOTIV_LICENSE", ""),
+        debit=int(os.getenv("EMOTIV_DEBIT", "1")),
+    )
+
+
+def app_env_form_values() -> dict[str, str]:
+    """Current effective values for the env settings form (read from os.environ)."""
+    ce = read_cortex_env()
+    return {
+        "CORTEX_URL": ce.cortex_url,
+        "STREAMS": ",".join(ce.streams),
+        "EMOTIV_CLIENT_ID": ce.client_id or "",
+        "EMOTIV_CLIENT_SECRET": ce.client_secret or "",
+        "EMOTIV_LICENSE": ce.license,
+        "EMOTIV_DEBIT": str(ce.debit),
+        "COM_POWER_THRESHOLD": os.getenv("COM_POWER_THRESHOLD", "0.25"),
+    }
+
+
+def _env_value_needs_quotes(value: str) -> bool:
+    if not value:
+        return False
+    if any(c in value for c in ' \t#"\'\\\n\r'):
+        return True
+    return False
+
+
+def format_env_file_line(key: str, value: str) -> str:
+    if _env_value_needs_quotes(value):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'{key}="{escaped}"'
+    return f"{key}={value}"
+
+
+def write_app_env_file(path: Path, values: dict[str, str]) -> None:
+    lines = [format_env_file_line(k, values.get(k, "")) for k in APP_ENV_UI_KEYS]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def read_app_env_file_dict(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {k: "" for k in APP_ENV_UI_KEYS}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return {k: "" for k in APP_ENV_UI_KEYS}
+    out = {k: "" for k in APP_ENV_UI_KEYS}
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if "=" not in s:
+            continue
+        key, val = s.split("=", 1)
+        key = key.strip()
+        if key not in out:
+            continue
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+            inner = val[1:-1]
+            val = inner.replace("\\\\", "\\").replace('\\"', '"')
+        out[key] = val
+    return out
+
+
+def reload_app_env_into_os(path: Path = APP_ENV_PATH) -> None:
+    load_dotenv(path, override=True)
 
 UI = {
     "bg_outer": "#0a0a0c",
@@ -266,12 +361,16 @@ class CortexClient(threading.Thread):
         self.stop_event = threading.Event()
 
     def run(self):
-        if not CLIENT_ID or not CLIENT_SECRET:
-            self.on_error("Missing EMOTIV_CLIENT_ID or EMOTIV_CLIENT_SECRET in .env file")
+        env = read_cortex_env()
+        if not env.client_id or not env.client_secret:
+            self.on_error(
+                "Missing EMOTIV_CLIENT_ID or EMOTIV_CLIENT_SECRET "
+                "(set in .env or app environment settings)"
+            )
             return
 
         self.ws_app = websocket.WebSocketApp(
-            CORTEX_URL,
+            env.cortex_url,
             on_open=self._on_open,
             on_message=self._on_message,
             on_error=self._on_ws_error,
@@ -294,7 +393,7 @@ class CortexClient(threading.Thread):
             return
 
         try:
-            self.initialize_cortex()
+            self.initialize_cortex(env)
         except Exception as exc:
             self.on_error(str(exc))
 
@@ -371,12 +470,12 @@ class CortexClient(threading.Thread):
 
         return response.get("result")
 
-    def initialize_cortex(self):
+    def initialize_cortex(self, env: CortexEnv):
         self.on_status("Requesting access...")
 
         access = self.request_v2("requestAccess", {
-            "clientId": CLIENT_ID,
-            "clientSecret": CLIENT_SECRET,
+            "clientId": env.client_id,
+            "clientSecret": env.client_secret,
         })
 
         if not access.get("accessGranted"):
@@ -385,10 +484,10 @@ class CortexClient(threading.Thread):
         self.on_status("Authorizing...")
 
         auth = self.request_v2("authorize", {
-            "clientId": CLIENT_ID,
-            "clientSecret": CLIENT_SECRET,
-            "license": LICENSE,
-            "debit": DEBIT,
+            "clientId": env.client_id,
+            "clientSecret": env.client_secret,
+            "license": env.license,
+            "debit": env.debit,
         })
 
         cortex_token = auth["cortexToken"]
@@ -427,7 +526,7 @@ class CortexClient(threading.Thread):
         self.request_v2("subscribe", {
             "cortexToken": cortex_token,
             "session": session["id"],
-            "streams": STREAMS,
+            "streams": env.streams,
         })
 
         self.on_status(f"Ready · Headset {headset['id']}")
@@ -699,23 +798,24 @@ class App(tk.Tk):
         self.com_threshold_hint = None
         self._com_font_targets = None
 
-    def retry_connection(self):
+    def _restart_cortex_client(self, *, clear_error_ui: bool, status_message: str):
         try:
             self.cortex.stop()
         except Exception:
             pass
 
-        self.connection_failed = False
-        if self.retry_button is not None:
-            try:
-                self.retry_button.pack_forget()
-            except tk.TclError:
-                pass
-        if self.error_label is not None:
-            try:
-                self.error_label.config(text="")
-            except tk.TclError:
-                pass
+        if clear_error_ui:
+            self.connection_failed = False
+            if self.retry_button is not None:
+                try:
+                    self.retry_button.pack_forget()
+                except tk.TclError:
+                    pass
+            if self.error_label is not None:
+                try:
+                    self.error_label.config(text="")
+                except tk.TclError:
+                    pass
 
         self.cortex = CortexClient(
             on_stream=lambda msg: self.stream_queue.put(msg),
@@ -723,7 +823,13 @@ class App(tk.Tk):
             on_error=lambda msg: self.error_queue.put(msg),
         )
         self.cortex.start()
-        self.status_queue.put("Reconnecting...")
+        self.status_queue.put(status_message)
+
+    def retry_connection(self):
+        self._restart_cortex_client(
+            clear_error_ui=True,
+            status_message="Reconnecting...",
+        )
 
     def _on_canvas_configure(self, event):
         if event.widget is not self.canvas:
@@ -1280,6 +1386,15 @@ class App(tk.Tk):
             save_config(self.config_data)
             self.show_main_view()
 
+        env_link_row = tk.Frame(self.content, bg=UI["bg_panel"])
+        env_link_row.pack(pady=(16, 0))
+        self._make_button(
+            env_link_row,
+            "Environment variables…",
+            self.show_env_settings_view,
+            width=26,
+        ).pack()
+
         button_row = tk.Frame(self.content, bg=UI["bg_panel"])
         button_row.pack(pady=24)
 
@@ -1294,6 +1409,139 @@ class App(tk.Tk):
             button_row,
             "Save",
             save_settings,
+            primary=True,
+            width=12,
+        ).grid(row=0, column=1, padx=6)
+
+    def show_env_settings_view(self):
+        self.current_view = "env_settings"
+        self.clear_content()
+        reload_app_env_into_os()
+
+        tk.Label(
+            self.content,
+            text="Environment variables",
+            fg=UI["text"],
+            bg=UI["bg_panel"],
+            font=ui_font(20, True),
+        ).pack(pady=(24, 8))
+
+        tk.Label(
+            self.content,
+            text=(
+                f"Values are saved to {APP_ENV_PATH.name} "
+                "(separate from config.json). Restart uses the updated connection."
+            ),
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(10),
+            wraplength=420,
+            justify="center",
+        ).pack(pady=(0, 12), padx=16)
+
+        outer = tk.Frame(self.content, bg=UI["bg_panel"])
+        outer.pack(fill="both", expand=True, padx=12, pady=4)
+
+        canvas = tk.Canvas(
+            outer,
+            bg=UI["bg_panel"],
+            highlightthickness=0,
+            height=280,
+        )
+        scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        form = tk.Frame(canvas, bg=UI["bg_panel"])
+        form.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=form, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+
+        def _on_mousewheel(event):
+            if sys.platform == "darwin":
+                canvas.yview_scroll(int(-1 * event.delta), "units")
+            else:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        form.bind("<MouseWheel>", _on_mousewheel)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        entry_kw = dict(
+            bg=UI["pad_idle_bg"],
+            fg=UI["text"],
+            insertbackground=UI["text"],
+            highlightthickness=1,
+            highlightbackground=UI["border"],
+            highlightcolor=UI["accent"],
+            relief="flat",
+            font=ui_font(11),
+        )
+
+        initial = app_env_form_values()
+        string_vars: dict[str, tk.StringVar] = {}
+        for i, key in enumerate(APP_ENV_UI_KEYS):
+            tk.Label(
+                form,
+                text=key,
+                fg=UI["text"],
+                bg=UI["bg_panel"],
+                font=ui_font(11),
+            ).grid(row=i, column=0, sticky="nw", padx=6, pady=6)
+            string_vars[key] = tk.StringVar(value=initial[key])
+            tk.Entry(
+                form,
+                textvariable=string_vars[key],
+                width=36,
+                **entry_kw,
+            ).grid(row=i, column=1, padx=6, pady=6, sticky="ew")
+        form.columnconfigure(1, weight=1)
+
+        def save_env_settings():
+            raw = {k: string_vars[k].get().strip() for k in APP_ENV_UI_KEYS}
+            try:
+                int(raw["EMOTIV_DEBIT"])
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid value",
+                    "EMOTIV_DEBIT must be an integer.",
+                )
+                return
+            try:
+                float(raw["COM_POWER_THRESHOLD"])
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid value",
+                    "COM_POWER_THRESHOLD must be a number.",
+                )
+                return
+
+            write_app_env_file(APP_ENV_PATH, raw)
+            reload_app_env_into_os()
+            self._restart_cortex_client(
+                clear_error_ui=True,
+                status_message="Reconnecting after env update...",
+            )
+            self.show_settings_view()
+
+        def back_without_save():
+            self.show_settings_view()
+
+        button_row = tk.Frame(self.content, bg=UI["bg_panel"])
+        button_row.pack(pady=20)
+
+        self._make_button(
+            button_row,
+            "Back",
+            back_without_save,
+            width=12,
+        ).grid(row=0, column=0, padx=6)
+
+        self._make_button(
+            button_row,
+            "Save",
+            save_env_settings,
             primary=True,
             width=12,
         ).grid(row=0, column=1, padx=6)

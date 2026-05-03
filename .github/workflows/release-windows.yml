@@ -2,10 +2,11 @@
 #   - app.exe
 #   - latest.json  (version, download_url for this tag's app.exe, sha256)
 #
-# In-app updates: bake this URL when building (build-and-sign.ps1 -UpdateManifestUrl):
+# In-app updates: bake this URL when building (scripts/build.sh --update-manifest-url):
 #   https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json
 #
 # Trigger: push an annotated or lightweight tag matching v* (e.g. v1.2.3).
+# Runner: windows-latest (required for Windows PE). Shell: bash (Git Bash on the runner).
 
 name: Release Windows EXE
 
@@ -22,7 +23,7 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        shell: pwsh
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,41 +39,53 @@ jobs:
       - name: Derive semver from tag
         id: meta
         run: |
-          $tag = "${{ github.ref_name }}"
-          if ([string]::IsNullOrWhiteSpace($tag)) { throw "Empty ref_name" }
-          if ($tag.StartsWith("v", [System.StringComparison]::OrdinalIgnoreCase)) {
-            $ver = $tag.Substring(1)
-          } else {
-            $ver = $tag
-          }
-          $repo = "${{ github.repository }}"
-          $manifestUrl = "https://github.com/$repo/releases/latest/download/latest.json"
-          $downloadUrl = "https://github.com/$repo/releases/download/$tag/app.exe"
-          @(
-            "version=$ver",
-            "manifest_url=$manifestUrl",
-            "download_url=$downloadUrl"
-          ) | Set-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8NoBOM
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ -z "$tag" ]]; then echo "Empty GITHUB_REF_NAME"; exit 1; fi
+          if [[ "${tag}" =~ ^[vV] ]]; then
+            ver="${tag#?}"
+          else
+            ver="$tag"
+          fi
+          repo="${GITHUB_REPOSITORY}"
+          manifest_url="https://github.com/${repo}/releases/latest/download/latest.json"
+          download_url="https://github.com/${repo}/releases/download/${tag}/app.exe"
+          {
+            echo "version=${ver}"
+            echo "manifest_url=${manifest_url}"
+            echo "download_url=${download_url}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Build PyInstaller EXE (unsigned in CI)
         env:
           APP_VERSION: ${{ steps.meta.outputs.version }}
           MANIFEST_URL: ${{ steps.meta.outputs.manifest_url }}
         run: |
-          .\scripts\build-and-sign.ps1 -SkipSign -AppVersion $env:APP_VERSION -UpdateManifestUrl $env:MANIFEST_URL
+          set -euo pipefail
+          bash ./scripts/build.sh --skip-sign \
+            --app-version "${APP_VERSION}" \
+            --update-manifest-url "${MANIFEST_URL}"
 
       - name: Write latest.json for this release
         env:
           APP_VERSION: ${{ steps.meta.outputs.version }}
           DOWNLOAD_URL: ${{ steps.meta.outputs.download_url }}
         run: |
-          $sha = (Get-FileHash -LiteralPath "dist\app.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
-          $obj = [ordered]@{
-            version      = $env:APP_VERSION
-            download_url = $env:DOWNLOAD_URL
-            sha256       = $sha
+          set -euo pipefail
+          python -c "
+          import hashlib, json, os, pathlib
+          exe = pathlib.Path('dist/app.exe')
+          h = hashlib.sha256(exe.read_bytes()).hexdigest().lower()
+          obj = {
+              'version': os.environ['APP_VERSION'],
+              'download_url': os.environ['DOWNLOAD_URL'],
+              'sha256': h,
           }
-          ($obj | ConvertTo-Json -Compress) | Set-Content -LiteralPath "latest.json" -Encoding utf8
+          pathlib.Path('latest.json').write_text(
+              json.dumps(obj, separators=(',', ':')),
+              encoding='utf-8',
+          )
+          "
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2

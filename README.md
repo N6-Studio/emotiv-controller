@@ -102,28 +102,30 @@ The shortcut flips keyboard simulation on/off and saves the choice to `config.js
 
 ## Optional: Windows executable
 
-PyInstaller is configured in `app.spec`. From `python/scripts/`:
+PyInstaller is configured in `app.spec`. From the **repository root** (this folder), use **Git Bash** (or another bash) on Windows:
 
-```powershell
-.\build-and-sign.ps1 -SkipSign
+```bash
+bash ./scripts/build.sh --skip-sign
 ```
 
-Output is under `python/dist/`. See the script header for signing options (`signtool`) and debug console builds.
+Output is under `dist/`. For a console build add `--debug`. Authenticode signing needs Windows, the Windows SDK (`signtool`), and either `--cert-thumbprint` or `--pfx-path` plus `PFX_PASSWORD` in the environment (omit `--skip-sign`). See comments at the top of [`scripts/build.sh`](scripts/build.sh).
 
 ### GitHub releases and updates
 
-Releases for [N6-Studio/emotiv-controller](https://github.com/N6-Studio/emotiv-controller) are built by GitHub Actions when you push a version tag matching `v*` (for example `v1.0.0`). The workflow is [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml): it builds `dist/app.exe`, writes `latest.json` (version, download URL for that tag’s `app.exe`, and SHA-256), and attaches both to the GitHub Release.
+Releases for [N6-Studio/emotiv-controller](https://github.com/N6-Studio/emotiv-controller) are built by GitHub Actions when you push a version tag matching `v*` (for example `v1.0.0`). The workflow is [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml): it runs on **windows-latest** with **bash**, calls [`scripts/build.sh`](scripts/build.sh), writes `latest.json`, and attaches `dist/app.exe` and `latest.json` to the GitHub Release.
+
+**CI on Linux:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs [`scripts/ci-test.sh`](scripts/ci-test.sh) on **ubuntu-latest** (pytest).
 
 Use this **stable manifest URL** when baking update checks into the shipped EXE:
 
 `https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json`
 
-Example (match `-AppVersion` to the tag you are shipping):
+Example (match `--app-version` to the tag you are shipping):
 
-```powershell
-.\build-and-sign.ps1 -SkipSign `
-  -AppVersion "1.0.0" `
-  -UpdateManifestUrl "https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json"
+```bash
+bash ./scripts/build.sh --skip-sign \
+  --app-version "1.0.0" \
+  --update-manifest-url "https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json"
 ```
 
 After the first successful release, users with that URL in the build can use **Check for updates** in the app.
@@ -132,9 +134,11 @@ After the first successful release, users with that URL in the build can use **C
 
 ## Tests
 
-```powershell
-pytest
+```bash
+bash ./scripts/ci-test.sh
 ```
+
+Or, with a venv already activated: `pytest`.
 
 ---
 

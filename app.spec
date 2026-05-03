@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 
-# Set by scripts/build-and-sign.ps1: '1' = console for debugging; default = windowed (no console).
+# Set by scripts/build.sh (--debug): '1' = console for debugging; default = windowed (no console).
 _emotiv_console = os.environ.get("EMOTIV_PYI_DEBUG", "0").strip().lower() in ("1", "true", "yes")
 
 a = Analysis(
