@@ -16,5 +16,11 @@
     "left": "a",
     "backward": "s",
     "right": "d"
+  },
+  "com_key_bindings": {
+    "push": "w",
+    "pull": "s",
+    "left": "a",
+    "right": "d"
   }
 }

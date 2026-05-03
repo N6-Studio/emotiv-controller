@@ -97,6 +97,7 @@ class AppConfig:
     keyboard_enabled: bool = False
     com_power_threshold: float = DEFAULT_COM_POWER_THRESHOLD
     key_bindings: dict = None
+    com_key_bindings: dict = None
 
     def __post_init__(self):
         if self.key_bindings is None:
@@ -111,6 +112,23 @@ class AppConfig:
             movement: float(self.movement_thresholds.get(movement, base))
             for movement in MOVEMENTS
         }
+        com_defaults = {
+            "push": self.key_bindings.get("forward", "w"),
+            "pull": self.key_bindings.get("backward", "s"),
+            "left": self.key_bindings.get("left", "a"),
+            "right": self.key_bindings.get("right", "d"),
+        }
+        if self.com_key_bindings is None:
+            self.com_key_bindings = dict(com_defaults)
+        else:
+            merged = dict(self.com_key_bindings)
+            for cmd in COM_MAPPED_MENTAL_ACTIONS:
+                v = merged.get(cmd)
+                if not v or not str(v).strip():
+                    merged[cmd] = com_defaults[cmd]
+                else:
+                    merged[cmd] = str(v).strip()
+            self.com_key_bindings = merged
 
 
 def load_config() -> AppConfig:
@@ -135,37 +153,86 @@ class SimulatedKeyboard:
     def __init__(self):
         self.controller = pynput_keyboard.Controller()
         self.pressed_movements = set()
+        self.pressed_com_actions = set()
+        self._key_refcount: dict[str, int] = {}
+
+    def _add_physical_key(self, key: str):
+        n = self._key_refcount.get(key, 0) + 1
+        self._key_refcount[key] = n
+        if n == 1:
+            self.controller.press(key)
+
+    def _remove_physical_key(self, key: str):
+        n = self._key_refcount.get(key, 0)
+        if n <= 0:
+            return
+        n -= 1
+        if n == 0:
+            self._key_refcount.pop(key, None)
+            self.controller.release(key)
+        else:
+            self._key_refcount[key] = n
 
     def press(self, movement: str, key: str):
         if movement in self.pressed_movements:
             return
 
-        self.controller.press(key)
+        self._add_physical_key(key)
         self.pressed_movements.add(movement)
 
     def release(self, movement: str, key: str):
         if movement not in self.pressed_movements:
             return
 
-        self.controller.release(key)
+        self._remove_physical_key(key)
         self.pressed_movements.remove(movement)
 
-    def sync(self, active_movements: set, config: AppConfig):
+    def press_com(self, action: str, key: str):
+        if action in self.pressed_com_actions:
+            return
+        self._add_physical_key(key)
+        self.pressed_com_actions.add(action)
+
+    def release_com(self, action: str, key: str):
+        if action not in self.pressed_com_actions:
+            return
+        self._remove_physical_key(key)
+        self.pressed_com_actions.remove(action)
+
+    def sync(
+        self,
+        motion_movements: set,
+        com_actions: set,
+        config: AppConfig,
+    ):
         if not config.keyboard_enabled:
             self.release_all(config)
             return
 
         for movement, key in config.key_bindings.items():
-            if movement in active_movements:
+            if movement in motion_movements:
                 self.press(movement, key)
             else:
                 self.release(movement, key)
+
+        for action in COM_MAPPED_MENTAL_ACTIONS:
+            key = config.com_key_bindings.get(action)
+            if not key:
+                continue
+            if action in com_actions:
+                self.press_com(action, key)
+            else:
+                self.release_com(action, key)
 
     def release_all(self, config: AppConfig):
         for movement in list(self.pressed_movements):
             key = config.key_bindings.get(movement)
             if key:
                 self.release(movement, key)
+        for action in list(self.pressed_com_actions):
+            key = config.com_key_bindings.get(action)
+            if key:
+                self.release_com(action, key)
 
 
 class CortexClient(threading.Thread):
@@ -1093,6 +1160,47 @@ class App(tk.Tk):
         )
         com_spin.grid(row=4, column=1, padx=6, pady=8)
 
+        tk.Label(
+            form,
+            text="Mental command keys (held while COM power is above threshold)",
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(10),
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=6, pady=(14, 4))
+
+        com_binding_vars: dict[str, tk.StringVar] = {}
+        com_binding_defaults = {
+            "push": self.config_data.key_bindings.get("forward", "w"),
+            "pull": self.config_data.key_bindings.get("backward", "s"),
+            "left": self.config_data.key_bindings.get("left", "a"),
+            "right": self.config_data.key_bindings.get("right", "d"),
+        }
+        for i, cmd in enumerate(COM_MAPPED_MENTAL_ACTIONS):
+            row = 6 + i
+            tk.Label(
+                form,
+                text=cmd,
+                fg=UI["text"],
+                bg=UI["bg_panel"],
+                font=ui_font(11),
+            ).grid(row=row, column=0, sticky="w", padx=6, pady=4)
+            com_binding_vars[cmd] = tk.StringVar(
+                value=str(self.config_data.com_key_bindings.get(cmd, ""))
+            )
+            tk.Entry(
+                form,
+                textvariable=com_binding_vars[cmd],
+                width=10,
+                bg=UI["pad_idle_bg"],
+                fg=UI["text"],
+                insertbackground=UI["text"],
+                highlightthickness=1,
+                highlightbackground=UI["border"],
+                highlightcolor=UI["accent"],
+                relief="flat",
+                font=ui_font(11),
+            ).grid(row=row, column=1, padx=6, pady=4, sticky="w")
+
         def save_settings():
             self.config_data.keyboard_enabled = bool(keyboard_var.get())
             self.config_data.threshold_global = bool(threshold_global_var.get())
@@ -1100,6 +1208,11 @@ class App(tk.Tk):
             for movement, var in per_movement_vars.items():
                 self.config_data.movement_thresholds[movement] = float(var.get())
             self.config_data.com_power_threshold = float(com_var.get())
+            for cmd in COM_MAPPED_MENTAL_ACTIONS:
+                raw = com_binding_vars[cmd].get().strip()
+                self.config_data.com_key_bindings[cmd] = (
+                    raw if raw else com_binding_defaults[cmd]
+                )
             save_config(self.config_data)
             self.show_main_view()
 
@@ -1160,7 +1273,9 @@ class App(tk.Tk):
 
     def process_stream_message(self, msg: dict):
         has_input = False
-        detected = set()
+        motion_detected = set()
+        com_movements = set()
+        com_actions = set()
 
         if isinstance(msg.get("mot"), list):
             has_input = True
@@ -1168,7 +1283,7 @@ class App(tk.Tk):
             if len(mot) >= 2:
                 self.current_x = float(mot[-2] or 0)
                 self.current_y = float(mot[-1] or 0)
-                detected.update(self.map_motion(self.current_x, self.current_y))
+                motion_detected.update(self.map_motion(self.current_x, self.current_y))
 
         if isinstance(msg.get("com"), list):
             has_input = True
@@ -1179,13 +1294,16 @@ class App(tk.Tk):
                 self.com_powers[k] = 0.0
             if action in self.com_powers:
                 self.com_powers[action] = power
-            detected.update(self.map_mental_command(com))
+            cm, ca = self.map_mental_command(com)
+            com_movements.update(cm)
+            com_actions.update(ca)
 
         if not has_input:
             return
 
+        detected = motion_detected | com_movements
         self.active_movements = detected
-        self.sim_keyboard.sync(self.active_movements, self.config_data)
+        self.sim_keyboard.sync(motion_detected, com_actions, self.config_data)
 
         if self.calibration_active:
             self.calibration_samples.append((self.current_x, self.current_y))
@@ -1220,12 +1338,13 @@ class App(tk.Tk):
 
         return movements
 
-    def map_mental_command(self, com: list) -> set:
+    def map_mental_command(self, com: list) -> tuple[set, set]:
+        """Returns (movement labels for the pad UI, mental actions for COM keys)."""
         action = str(com[0] or "neutral").lower()
         power = float(com[1] or 0)
 
         if power < self.config_data.com_power_threshold:
-            return set()
+            return set(), set()
 
         mapping = {
             "push": "forward",
@@ -1235,7 +1354,9 @@ class App(tk.Tk):
         }
 
         movement = mapping.get(action)
-        return {movement} if movement else set()
+        if not movement:
+            return set(), set()
+        return {movement}, {action}
 
     def get_active_neutral_x(self):
         if self.current_view == "calibration_review" and self.pending_neutral_x is not None:
@@ -1281,6 +1402,16 @@ class App(tk.Tk):
                         hint.config(text=f"Activate if power ≥ {thr:.2f}")
                 except tk.TclError:
                     pass
+            com_names = (getattr(self, "_com_font_targets", None) or {}).get("names")
+            if com_names and len(com_names) == len(COM_MAPPED_MENTAL_ACTIONS):
+                for cmd, nl in zip(COM_MAPPED_MENTAL_ACTIONS, com_names):
+                    try:
+                        if not nl.winfo_exists():
+                            continue
+                    except tk.TclError:
+                        continue
+                    key = str(self.config_data.com_key_bindings.get(cmd, ""))
+                    nl.config(text=f"{cmd} → {key}")
             for cmd, lab in self.com_power_labels.items():
                 try:
                     if not lab.winfo_exists():
