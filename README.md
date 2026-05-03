@@ -1,164 +1,68 @@
 # EMOTIV Movement Bridge
 
-Desktop bridge between **EMOTIV Cortex** and your PC: it reads live **motion** (and optionally **mental command**) streams from the headset, maps them to abstract directions (`forward`, `backward`, `left`, `right`), shows them in a small UI, and can **simulate keyboard keys** (default WASD-style bindings).
+**Turn head movements from your EMOTIV headset into keys on your PC** — so you can move in games or apps using **W, A, S, D** (or keys you choose) without touching the keyboard.
 
-The interface text is **Italian**. Core logic stays movement-agnostic; defaults are WASD for convenience.
-
----
-
-## Prerequisites
-
-- **EMOTIV Launcher** and **Cortex** installed and running locally, headset paired and visible in Cortex.
-- **Python 3** (3.10+ recommended; the project is tested with recent 3.x releases).
-- **Windows** is the primary target (global hotkey and keyboard simulation are tuned for it). macOS/Linux may work where `pynput` and Cortex allow.
+A small window shows what the app thinks you are doing (forward, back, left, right). The on-screen text is **Italian**; you do not need to change anything for that.
 
 ---
 
-## Install
+## What you need
 
-From this directory (`python/`):
+- An **EMOTIV** headset that works with **EMOTIV Cortex** (Launcher + Cortex installed on your computer, headset paired and visible in Cortex).
+- **Windows** is what this app is built for first. Other systems might work but are not the main focus.
+- An **EMOTIV developer account** so you can get the **Client ID** and **Client Secret** Cortex asks for (the app needs these once to connect).
+
+---
+
+## If you downloaded the Windows program (.exe)
+
+1. Put the file somewhere you like (for example your Desktop or a folder you use for games).
+2. Run **EMOTIV Launcher** and **Cortex**, and connect your headset.
+3. Double-click the app. Enter your **Client ID** and **Client Secret** when the app asks (or in **Settings**), if you have not already.
+4. Follow the steps inside the app: wait until it says it is connected, then **calibrate** your “neutral” head position when prompted.
+5. Turn **keyboard simulation** on when you want keys to be sent to your game or app. You can turn it off anytime to test without sending keys.
+
+**Updates:** If your build supports it, use **Check for updates** under **Settings** after releases are published.
+
+---
+
+## If you are running it from the project folder (for advanced users)
+
+You need **Python 3** (3.10 or newer is a good choice). Open a terminal in the `python` folder, create a virtual environment, install dependencies, then start the app:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install websocket-client python-dotenv pynput
-```
-
-For development and tests:
-
-```powershell
-pip install -r requirements-dev.txt
-```
-
----
-
-## Configure
-
-### 1. Environment (`.env`)
-
-Create a `.env` file **next to** `app.py` (same folder you run the app from). Cortex credentials come from the EMOTIV developer portal.
-
-```env
-EMOTIV_CLIENT_ID=your_client_id
-EMOTIV_CLIENT_SECRET=your_client_secret
-EMOTIV_LICENSE=
-EMOTIV_DEBIT=1
-CORTEX_URL=wss://localhost:6868
-STREAMS=mot,com
-```
-
-| Variable | Meaning |
-|----------|---------|
-| `EMOTIV_CLIENT_ID` / `EMOTIV_CLIENT_SECRET` | Required Cortex API client credentials. |
-| `EMOTIV_LICENSE` | Optional license string if your account requires it. |
-| `EMOTIV_DEBIT` | Session debit flag (default `1`). |
-| `CORTEX_URL` | Cortex WebSocket URL (default local Cortex). |
-| `STREAMS` | Comma-separated Cortex streams; `mot` = motion, `com` = mental commands. Use `mot` only if you do not need mental commands. |
-
-### 2. Local settings (`config.json`)
-
-On first run, the app creates or updates `config.json` in the **current working directory** (typically the `python/` folder). It stores:
-
-- Calibrated **neutral** head pose (`neutral_x`, `neutral_y`)
-- **Threshold** for motion activation (global or per-direction)
-- **Mental command power threshold** (minimum COM signal strength to treat a command as active)
-- **Keyboard simulation** on/off
-- **Key bindings** for motion and mental commands
-
-You can edit `config.json` while the app is closed, or change most values from the in-app settings.
-
----
-
-## Run
-
-Always run from the folder that contains `app.py`, `.env`, and `config.json` so paths resolve correctly:
-
-```powershell
-cd D:\path\to\emotiv-wasd-bridge\python
-.\.venv\Scripts\Activate.ps1
 python app.py
 ```
 
----
-
-## Using the app
-
-1. **Start Cortex** and ensure the headset is connected before or shortly after opening the bridge.
-2. Watch the **connection status** in the UI; if it fails, fix Cortex/Launcher and use any **retry** control offered.
-3. **Calibrate neutral**: hold a comfortable “center” head pose and run the neutral calibration so movement is measured relative to that pose.
-4. Use the **crosshair / pads** to confirm motion (and mental commands if `STREAMS` includes `com`) match what you expect.
-5. **Simulated keyboard** can be turned on or off from settings. When off, no keys are sent—useful for testing the UI only.
-6. **Sensitivity**: adjust the motion threshold (global or per direction) if activations are too weak or too twitchy.
-
-### Global shortcut (toggle keyboard simulation)
-
-- **Windows**: the app prefers **Ctrl+Shift+K**. If that combo is already registered by another program, it falls back to **Ctrl+Alt+K** and may show a short status hint. If native registration fails, **pynput** handles **Ctrl+Shift+K** or **Ctrl+Alt+K**.
-- **Non-Windows**: **Ctrl+Shift+K** or **Ctrl+Alt+K** via `pynput`.
-
-The shortcut flips keyboard simulation on/off and saves the choice to `config.json`.
+Always start the app from the same folder as `app.py` so it finds your settings files.
 
 ---
 
-## Optional: Windows executable
+## First-time tips
 
-PyInstaller is configured in `app.spec`. From the **repository root** (this folder), use **Git Bash** (or another bash) on Windows:
-
-```bash
-bash ./scripts/build.sh --skip-sign
-```
-
-Output is under `dist/`. For a console build add `--debug`. Authenticode signing needs Windows, the Windows SDK (`signtool`), and either `--cert-thumbprint` or `--pfx-path` plus `PFX_PASSWORD` in the environment (omit `--skip-sign`). See comments at the top of [`scripts/build.sh`](scripts/build.sh).
-
-### GitHub releases and updates
-
-Releases for [N6-Studio/emotiv-controller](https://github.com/N6-Studio/emotiv-controller) are built by GitHub Actions when you push a version tag matching `v*` (for example `v1.0.0`). The workflow is [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml): it runs on **windows-latest** with **bash**, calls [`scripts/build.sh`](scripts/build.sh), writes `latest.json`, and attaches `dist/app.exe` and `latest.json` to the GitHub Release.
-
-#### Automating the tag from a `VERSION` file
-
-The repo root file [`VERSION`](VERSION) holds the semver string **without** a `v` prefix (for example `0.1.0` or `0.2.0-beta.1`). When that file changes on `main` or `master`, [`.github/workflows/tag-from-version.yml`](.github/workflows/tag-from-version.yml) runs: if `refs/tags/v{VERSION}` already exists on the remote, it exits successfully and does nothing; otherwise it creates an **annotated** tag on the pushed commit and pushes it.
-
-The tag is pushed with the default **`GITHUB_TOKEN`**. Pushes with that token do not start workflows that only listen for `push` tags, so after a new tag is pushed the same job starts **Release Windows EXE** via **`workflow_dispatch`** (`gh workflow run … --ref` the new tag). No personal access token is required.
-
-You can still create tags manually with `git tag` / `git push`; that still triggers the release workflow on tag push. To **retry** tag creation after a failed run without editing `VERSION`, use **Actions → Tag from VERSION → Run workflow**.
-
-If a release build failed but the tag already exists, delete the tag (or bump `VERSION`) before expecting a new release; the automation will not move an existing tag.
-
-**CI on Linux:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs [`scripts/ci-test.sh`](scripts/ci-test.sh) on **ubuntu-latest** (pytest).
-
-Use this **stable manifest URL** when baking update checks into the shipped EXE:
-
-`https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json`
-
-Example (match `--app-version` to the tag you are shipping):
-
-```bash
-bash ./scripts/build.sh --skip-sign \
-  --app-version "1.0.0" \
-  --update-manifest-url "https://github.com/N6-Studio/emotiv-controller/releases/latest/download/latest.json"
-```
-
-After the first successful release, users with that URL in the build can use **Check for updates** under **Settings**.
+1. **Start Cortex first** and make sure the headset is connected before or right after you open the bridge.
+2. **Calibrate “neutral”** while sitting comfortably straight — later movements are compared to that pose.
+3. If movement feels **too sensitive or too weak**, open **Settings** and adjust the sensitivity / thresholds until it feels right.
+4. **Keyboard off** is useful while you learn the app: you see the directions on screen, but no keys are pressed.
+5. **Quick shortcut (Windows):** **Ctrl+Shift+K** turns keyboard simulation on or off. If another program already uses that, try **Ctrl+Alt+K**.
 
 ---
 
-## Tests
+## Something not working?
 
-```bash
-bash ./scripts/ci-test.sh
-```
-
-Or, with a venv already activated: `pytest`.
+| What you notice | What to try |
+|-----------------|-------------|
+| Will not connect | Cortex and Launcher running? Headset on? Client ID and Secret correct? |
+| No movement | Calibrate again; lower the sensitivity threshold a little. |
+| Mental commands do nothing | They must be trained in Cortex and enabled in your stream/settings; if you only care about head motion, you can ignore mental commands. |
+| Keys do not reach the game | Turn on keyboard simulation; on some PCs, security software may ask for permission to “control” the keyboard — allow it if you trust this app. |
+| Odd behavior | Start the app from the folder that contains `app.py` and your config files so nothing is “lost.” |
 
 ---
 
-## Troubleshooting
+## For developers
 
-| Issue | What to check |
-|--------|----------------|
-| Cannot connect | Cortex running, `CORTEX_URL`, firewall, correct `.env` credentials. |
-| No motion | Headset streaming, calibration done, thresholds not too high. |
-| No mental commands | `STREAMS` includes `com`; trained profile in Cortex; mental-command power threshold in Settings / `config.json`. |
-| Keys not sent | “Keyboard simulation” enabled; OS permissions for accessibility/input monitoring where required. |
-| Wrong working directory | Run from `python/` so `config.json` and `.env` are found. |
-
-For product behavior and architecture detail, see `PRD.md` in this folder.
+Tests, packaging with PyInstaller, release workflows, and deeper behavior are described in **`PRD.md`** and in **`scripts/build.sh`** (comments at the top). CI runs `scripts/ci-test.sh` (pytest on Linux). Release automation lives under `.github/workflows/`.
