@@ -1,0 +1,77 @@
+# When VERSION changes on the default branch, create and push v{VERSION} if that
+# tag does not exist yet. Push must use RELEASE_TAG_PAT so the tag push triggers
+# release-windows.yml (GITHUB_TOKEN pushes do not start other workflows).
+name: Tag from VERSION
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "VERSION"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read and validate VERSION
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ ! -f VERSION ]]; then
+            echo "VERSION file missing" >&2
+            exit 1
+          fi
+          raw="$(cat VERSION)"
+          v="${raw//$'\r'/}"
+          v="${v#"${v%%[![:space:]]*}"}"
+          v="${v%"${v##*[![:space:]]}"}"
+          if [[ -z "$v" ]]; then
+            echo "VERSION is empty" >&2
+            exit 1
+          fi
+          if [[ "$v" =~ [[:space:]] ]]; then
+            echo "VERSION must be a single line with no internal whitespace: got '$v'" >&2
+            exit 1
+          fi
+          if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "VERSION must look like 0.1.0 or 0.2.0-beta.1; got '$v'" >&2
+            exit 1
+          fi
+          echo "version=${v}" >> "${GITHUB_OUTPUT}"
+          echo "tag_name=v${v}" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip if tag already exists
+        id: exists
+        run: |
+          set -euo pipefail
+          tag="${{ steps.ver.outputs.tag_name }}"
+          refs="$(git ls-remote --tags origin "refs/tags/${tag}" 2>/dev/null || true)"
+          if [[ -n "$refs" ]]; then
+            echo "Release tag ${tag} already exists — nothing to do."
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Create and push tag
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          RELEASE_TAG_PAT: ${{ secrets.RELEASE_TAG_PAT }}
+          TAG_NAME: ${{ steps.ver.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_TAG_PAT:-}" ]]; then
+            echo "Secret RELEASE_TAG_PAT is not set. Add a PAT with contents:write so the tag push can trigger release-windows.yml." >&2
+            exit 1
+          fi
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git remote set-url origin "https://x-access-token:${RELEASE_TAG_PAT}@github.com/${GITHUB_REPOSITORY}.git"
+          git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG_NAME}"

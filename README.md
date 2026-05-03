@@ -114,6 +114,21 @@ Output is under `dist/`. For a console build add `--debug`. Authenticode signing
 
 Releases for [N6-Studio/emotiv-controller](https://github.com/N6-Studio/emotiv-controller) are built by GitHub Actions when you push a version tag matching `v*` (for example `v1.0.0`). The workflow is [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml): it runs on **windows-latest** with **bash**, calls [`scripts/build.sh`](scripts/build.sh), writes `latest.json`, and attaches `dist/app.exe` and `latest.json` to the GitHub Release.
 
+#### Automating the tag from a `VERSION` file
+
+The repo root file [`VERSION`](VERSION) holds the semver string **without** a `v` prefix (for example `0.1.0` or `0.2.0-beta.1`). When that file changes on `main` or `master`, [`.github/workflows/tag-from-version.yml`](.github/workflows/tag-from-version.yml) runs: if `refs/tags/v{VERSION}` already exists on the remote, it exits successfully and does nothing; otherwise it creates an **annotated** tag on the pushed commit and pushes it.
+
+Pushes performed with the default `GITHUB_TOKEN` do not trigger other workflows, so the tag push uses a separate credential:
+
+1. Create a **classic** personal access token with the `repo` scope, or a **fine-grained** token with **Contents: Read and write** for this repository only.
+2. In the GitHub repo settings, add a secret named **`RELEASE_TAG_PAT`** with that token.
+
+Without `RELEASE_TAG_PAT`, the workflow fails when a new tag is needed (existing tags still skip cleanly with no secret use).
+
+You can still create tags manually with `git tag` / `git push`. To **retry** tag creation after a failed run without editing `VERSION`, use **Actions → Tag from VERSION → Run workflow**.
+
+If a release build failed but the tag already exists, delete the tag (or bump `VERSION`) before expecting a new release; the automation will not move an existing tag.
+
 **CI on Linux:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs [`scripts/ci-test.sh`](scripts/ci-test.sh) on **ubuntu-latest** (pytest).
 
 Use this **stable manifest URL** when baking update checks into the shipped EXE:
