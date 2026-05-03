@@ -3,7 +3,7 @@ import os
 import ssl
 import threading
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Callable, Optional
@@ -59,6 +59,8 @@ class AppConfig:
     neutral_x: Optional[float] = None
     neutral_y: Optional[float] = None
     threshold: float = DEFAULT_THRESHOLD
+    threshold_global: bool = True
+    movement_thresholds: dict = field(default_factory=dict)
     keyboard_enabled: bool = False
     com_power_threshold: float = DEFAULT_COM_POWER_THRESHOLD
     key_bindings: dict = None
@@ -69,6 +71,13 @@ class AppConfig:
                 movement: data["default_key"]
                 for movement, data in MOVEMENTS.items()
             }
+        if self.movement_thresholds is None:
+            self.movement_thresholds = {}
+        base = float(self.threshold)
+        self.movement_thresholds = {
+            movement: float(self.movement_thresholds.get(movement, base))
+            for movement in MOVEMENTS
+        }
 
 
 def load_config() -> AppConfig:
@@ -586,18 +595,36 @@ class App(tk.Tk):
         form = tk.Frame(self.content, bg="#171717")
         form.pack(pady=4)
 
-        tk.Label(
+        threshold_global_var = tk.BooleanVar(value=self.config_data.threshold_global)
+
+        global_threshold_cb = tk.Checkbutton(
             form,
+            text="Soglia unica per tutti i movimenti",
+            variable=threshold_global_var,
+            fg="white",
+            bg="#171717",
+            selectcolor="#171717",
+            activebackground="#171717",
+            activeforeground="white",
+            font=("Arial", 11),
+        )
+        global_threshold_cb.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 4))
+
+        threshold_inner = tk.Frame(form, bg="#171717")
+        threshold_inner.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=4)
+
+        threshold_var = tk.DoubleVar(value=self.config_data.threshold)
+
+        global_thr_row = tk.Frame(threshold_inner, bg="#171717")
+        tk.Label(
+            global_thr_row,
             text="Soglia movimenti",
             fg="white",
             bg="#171717",
             font=("Arial", 11),
         ).grid(row=0, column=0, sticky="w", padx=6, pady=8)
-
-        threshold_var = tk.DoubleVar(value=self.config_data.threshold)
-
         threshold_spin = ttk.Spinbox(
-            form,
+            global_thr_row,
             from_=1,
             to=50,
             increment=0.5,
@@ -606,13 +633,47 @@ class App(tk.Tk):
         )
         threshold_spin.grid(row=0, column=1, padx=6, pady=8)
 
+        per_thr_frame = tk.Frame(threshold_inner, bg="#171717")
+        per_movement_vars: dict[str, tk.DoubleVar] = {}
+        for i, movement in enumerate(MOVEMENTS):
+            per_movement_vars[movement] = tk.DoubleVar(
+                value=self.config_data.movement_thresholds[movement]
+            )
+            tk.Label(
+                per_thr_frame,
+                text=f"Soglia {MOVEMENTS[movement]['ui_name']} ({MOVEMENTS[movement]['label']})",
+                fg="white",
+                bg="#171717",
+                font=("Arial", 11),
+            ).grid(row=i, column=0, sticky="w", padx=6, pady=6)
+            spin = ttk.Spinbox(
+                per_thr_frame,
+                from_=1,
+                to=50,
+                increment=0.5,
+                textvariable=per_movement_vars[movement],
+                width=8,
+            )
+            spin.grid(row=i, column=1, padx=6, pady=6)
+
+        def refresh_threshold_mode(*_args):
+            if threshold_global_var.get():
+                per_thr_frame.pack_forget()
+                global_thr_row.pack(fill="x")
+            else:
+                global_thr_row.pack_forget()
+                per_thr_frame.pack(fill="x")
+
+        threshold_global_var.trace_add("write", refresh_threshold_mode)
+        refresh_threshold_mode()
+
         tk.Label(
             form,
             text="Soglia potenza com",
             fg="white",
             bg="#171717",
             font=("Arial", 11),
-        ).grid(row=1, column=0, sticky="w", padx=6, pady=8)
+        ).grid(row=2, column=0, sticky="w", padx=6, pady=8)
 
         com_var = tk.DoubleVar(value=self.config_data.com_power_threshold)
 
@@ -624,11 +685,14 @@ class App(tk.Tk):
             textvariable=com_var,
             width=8,
         )
-        com_spin.grid(row=1, column=1, padx=6, pady=8)
+        com_spin.grid(row=2, column=1, padx=6, pady=8)
 
         def save_settings():
             self.config_data.keyboard_enabled = bool(keyboard_var.get())
+            self.config_data.threshold_global = bool(threshold_global_var.get())
             self.config_data.threshold = float(threshold_var.get())
+            for movement, var in per_movement_vars.items():
+                self.config_data.movement_thresholds[movement] = float(var.get())
             self.config_data.com_power_threshold = float(com_var.get())
             save_config(self.config_data)
             self.show_main_view()
@@ -712,21 +776,29 @@ class App(tk.Tk):
     def map_motion(self, x: float, y: float) -> set:
         neutral_x = self.get_active_neutral_x()
         neutral_y = self.get_active_neutral_y()
-        threshold = self.config_data.threshold
+        cfg = self.config_data
+        if cfg.threshold_global:
+            t_fwd = t_back = t_left = t_right = float(cfg.threshold)
+        else:
+            m = cfg.movement_thresholds
+            t_fwd = float(m["forward"])
+            t_back = float(m["backward"])
+            t_left = float(m["left"])
+            t_right = float(m["right"])
 
         if neutral_x is None or neutral_y is None:
             return set()
 
         movements = set()
 
-        if x <= neutral_x - threshold:
+        if x <= neutral_x - t_fwd:
             movements.add("forward")
-        elif x >= neutral_x + threshold:
+        elif x >= neutral_x + t_back:
             movements.add("backward")
 
-        if y <= neutral_y - threshold:
+        if y <= neutral_y - t_left:
             movements.add("left")
-        elif y >= neutral_y + threshold:
+        elif y >= neutral_y + t_right:
             movements.add("right")
 
         return movements
