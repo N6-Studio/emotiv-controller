@@ -1398,6 +1398,13 @@ class App(tk.Tk):
 
         updates_row = tk.Frame(self.content, bg=UI["bg_panel"])
         updates_row.pack(pady=(12, 0))
+        tk.Label(
+            updates_row,
+            text=f"Version {get_app_version()}",
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(10),
+        ).pack(pady=(0, 6))
         self._make_button(
             updates_row,
             "Check for updates",
