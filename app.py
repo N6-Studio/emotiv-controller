@@ -63,25 +63,28 @@ def ui_font(size: int, bold: bool = False):
 MOVEMENTS = {
     "forward": {
         "label": "W",
-        "ui_name": "Avanti",
+        "ui_name": "Forward",
         "default_key": "w",
     },
     "left": {
         "label": "A",
-        "ui_name": "Sinistra",
+        "ui_name": "Left",
         "default_key": "a",
     },
     "backward": {
         "label": "S",
-        "ui_name": "Indietro",
+        "ui_name": "Backward",
         "default_key": "s",
     },
     "right": {
         "label": "D",
-        "ui_name": "Destra",
+        "ui_name": "Right",
         "default_key": "d",
     },
 }
+
+# Mental command actions mapped to movement (Cortex `com[0]` names).
+COM_MAPPED_MENTAL_ACTIONS = ("push", "pull", "left", "right")
 
 
 @dataclass
@@ -179,6 +182,7 @@ class CortexClient(threading.Thread):
 
         self.ws_app = None
         self.ws = None
+        self.ws_open = False
         self.next_id = 1
         self.pending = {}
         self.connected_event = threading.Event()
@@ -186,7 +190,7 @@ class CortexClient(threading.Thread):
 
     def run(self):
         if not CLIENT_ID or not CLIENT_SECRET:
-            self.on_error("Mancano EMOTIV_CLIENT_ID o EMOTIV_CLIENT_SECRET nel file .env")
+            self.on_error("Missing EMOTIV_CLIENT_ID or EMOTIV_CLIENT_SECRET in .env file")
             return
 
         self.ws_app = websocket.WebSocketApp(
@@ -209,7 +213,7 @@ class CortexClient(threading.Thread):
         websocket_thread.start()
 
         if not self.connected_event.wait(timeout=15):
-            self.on_error("Timeout connessione Cortex")
+            self.on_error("Cortex connection timeout")
             return
 
         try:
@@ -222,14 +226,20 @@ class CortexClient(threading.Thread):
 
     def _on_open(self, ws):
         self.ws = ws
+        self.ws_open = True
         self.connected_event.set()
-        self.on_status("Connesso a Cortex")
+        self.on_status("Connected to Cortex")
 
     def _on_close(self, ws, close_status_code, close_msg):
-        self.on_status("Connessione chiusa")
+        self.ws_open = False
+        self.ws = None
+        self.on_status("Connection closed")
+
+    def is_websocket_connected(self) -> bool:
+        return self.ws_open
 
     def _on_ws_error(self, ws, error):
-        self.on_error(f"Errore WebSocket: {error}")
+        self.on_error(f"WebSocket error: {error}")
 
     def _on_message(self, ws, raw):
         try:
@@ -274,12 +284,12 @@ class CortexClient(threading.Thread):
         response = holder["response"]
 
         if response.get("error"):
-            raise RuntimeError(response["error"].get("message", f"Errore: {method}"))
+            raise RuntimeError(response["error"].get("message", f"Error: {method}"))
 
         return response.get("result")
 
     def initialize_cortex(self):
-        self.on_status("Richiesta accesso...")
+        self.on_status("Requesting access...")
 
         access = self.request_v2("requestAccess", {
             "clientId": CLIENT_ID,
@@ -287,9 +297,9 @@ class CortexClient(threading.Thread):
         })
 
         if not access.get("accessGranted"):
-            raise RuntimeError("Accesso non concesso. Approva l'app in EMOTIV Launcher.")
+            raise RuntimeError("Access denied. Approve the app in EMOTIV Launcher.")
 
-        self.on_status("Autorizzazione...")
+        self.on_status("Authorizing...")
 
         auth = self.request_v2("authorize", {
             "clientId": CLIENT_ID,
@@ -300,7 +310,7 @@ class CortexClient(threading.Thread):
 
         cortex_token = auth["cortexToken"]
 
-        self.on_status("Ricerca headset...")
+        self.on_status("Searching for headset...")
 
         headsets = self.request_v2("queryHeadsets")
         headset = None
@@ -314,16 +324,16 @@ class CortexClient(threading.Thread):
             headset = headsets[0]
 
         if headset is None:
-            raise RuntimeError("Nessun headset trovato.")
+            raise RuntimeError("No headset found.")
 
         if headset.get("status") != "connected":
-            self.on_status("Connessione headset...")
+            self.on_status("Connecting headset...")
             self.request_v2("controlDevice", {
                 "command": "connect",
                 "headset": headset["id"],
             })
 
-        self.on_status("Creazione sessione...")
+        self.on_status("Creating session...")
 
         session = self.request_v2("createSession", {
             "cortexToken": cortex_token,
@@ -337,7 +347,7 @@ class CortexClient(threading.Thread):
             "streams": STREAMS,
         })
 
-        self.on_status(f"Pronto · Headset {headset['id']}")
+        self.on_status(f"Ready · Headset {headset['id']}")
 
     def stop(self):
         self.stop_event.set()
@@ -349,7 +359,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("EMOTIV Movimenti")
+        self.title("EMOTIV Movement")
         self.minsize(360, 400)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         init_w = max(420, min(560, int(sw * 0.28)))
@@ -362,6 +372,10 @@ class App(tk.Tk):
         self.stream_queue = Queue()
         self.status_queue = Queue()
         self.error_queue = Queue()
+        self.keyboard_shortcut_queue = Queue()
+        self._hotkey_control_queue = Queue()
+        self._hotkey_thread: Optional[threading.Thread] = None
+        self._hotkey_win32_registered = threading.Event()
 
         self.current_x = 0.0
         self.current_y = 0.0
@@ -375,6 +389,10 @@ class App(tk.Tk):
 
         self.current_view = None
         self.movement_buttons = {}
+        self.com_powers = {a: 0.0 for a in COM_MAPPED_MENTAL_ACTIONS}
+        self.com_power_labels = None
+        self.com_threshold_hint = None
+        self._com_font_targets = None
 
         self.configure(bg=UI["bg_outer"])
 
@@ -392,8 +410,8 @@ class App(tk.Tk):
             highlightbackground=UI["border"],
             highlightcolor=UI["border"],
         )
-        cw0 = max(int(init_w * 0.94), 200)
-        ch0 = max(int(init_h * 0.94), 200)
+        cw0 = init_w
+        ch0 = init_h
         self._content_window_id = self.canvas.create_window(
             init_w // 2,
             init_h // 2,
@@ -487,117 +505,119 @@ class App(tk.Tk):
         self.config_data.keyboard_enabled = not self.config_data.keyboard_enabled
         save_config(self.config_data)
         self.status_queue.put(
-            "Tastiera simulata attiva"
+            "Simulated keyboard on"
             if self.config_data.keyboard_enabled
-            else "Tastiera simulata disattivata"
+            else "Simulated keyboard off"
         )
 
     def _install_pynput_hotkey(self):
+        if self.hotkey_listener is not None:
+            return
+        cb = lambda: self.after(0, self._toggle_keyboard_via_shortcut)
         self.hotkey_listener = pynput_keyboard.GlobalHotKeys({
-            "<ctrl>+<shift>+k": lambda: self.after(0, self._toggle_keyboard_via_shortcut),
+            "<ctrl>+<shift>+k": cb,
+            "<ctrl>+<alt>+k": cb,
         })
         self.hotkey_listener.start()
 
-    def _install_win32_hotkey(self) -> bool:
-        if sys.platform != "win32":
-            return False
-
+    def _win32_hotkey_thread_main(self):
         import ctypes
         from ctypes import wintypes
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
 
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+        class MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wintypes.HWND),
+                ("message", wintypes.UINT),
+                ("wParam", wintypes.WPARAM),
+                ("lParam", wintypes.LPARAM),
+                ("time", wintypes.DWORD),
+                ("pt", POINT),
+            ]
+
         WM_HOTKEY = 0x0312
+        MOD_ALT = 0x0001
         MOD_CONTROL = 0x0002
         MOD_SHIFT = 0x0004
-        GWL_WNDPROC = -4
         VK_K = 0x4B
         hotkey_id = 0x4D42
 
-        self.update_idletasks()
-        hwnd = wintypes.HWND(int(self.winfo_id()))
-        if not hwnd:
-            return False
-
-        if not user32.RegisterHotKey(hwnd, hotkey_id, MOD_CONTROL | MOD_SHIFT, VK_K):
-            return False
-
-        LRESULT = ctypes.c_longlong
-        WNDPROC = ctypes.WINFUNCTYPE(
-            LRESULT,
-            wintypes.HWND,
-            wintypes.UINT,
-            wintypes.WPARAM,
-            wintypes.LPARAM,
+        primary_mod = MOD_CONTROL | MOD_SHIFT
+        attempts = (
+            (primary_mod, None),
+            (MOD_CONTROL | MOD_ALT, "hint_ctrl_alt_k"),
         )
+        registered = False
+        for mod_flags, hint_cmd in attempts:
+            if user32.RegisterHotKey(None, hotkey_id, mod_flags, VK_K):
+                registered = True
+                if hint_cmd:
+                    self._hotkey_control_queue.put(hint_cmd)
+                break
 
-        user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
-        user32.GetWindowLongPtrW.restype = wintypes.LONG_PTR
-        user32.SetWindowLongPtrW.argtypes = [
-            wintypes.HWND,
-            ctypes.c_int,
-            WNDPROC,
-        ]
-        user32.SetWindowLongPtrW.restype = wintypes.LONG_PTR
-        user32.CallWindowProcW.argtypes = [
-            wintypes.LONG_PTR,
-            wintypes.HWND,
-            wintypes.UINT,
-            wintypes.WPARAM,
-            wintypes.LPARAM,
-        ]
-        user32.CallWindowProcW.restype = LRESULT
+        if not registered:
+            self._hotkey_control_queue.put("fallback_pynput")
+            return
 
-        old_wndproc = user32.GetWindowLongPtrW(hwnd, GWL_WNDPROC)
-        if not old_wndproc:
-            user32.UnregisterHotKey(hwnd, hotkey_id)
-            return False
+        self._hotkey_win32_registered.set()
+        msg = MSG()
+        while True:
+            r = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+            if r == 0:
+                break
+            if r == -1:
+                break
+            if msg.message == WM_HOTKEY:
+                self.keyboard_shortcut_queue.put(True)
+            else:
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
 
-        app = self
-
-        @WNDPROC
-        def hotkey_wndproc(hwnd_cb, msg, wparam, lparam):
-            if msg == WM_HOTKEY and wparam == hotkey_id:
-                app.after(0, app._toggle_keyboard_via_shortcut)
-                return 0
-            return user32.CallWindowProcW(
-                old_wndproc, hwnd_cb, msg, wparam, lparam
-            )
-
-        user32.SetWindowLongPtrW(hwnd, GWL_WNDPROC, hotkey_wndproc)
-
-        self._win_hotkey_hwnd = hwnd
-        self._win_hotkey_id = hotkey_id
-        self._win_hotkey_old_wndproc = old_wndproc
-        self._win_hotkey_wndproc = hotkey_wndproc
-        return True
+        user32.UnregisterHotKey(None, hotkey_id)
 
     def start_shortcut_listener(self):
         self.hotkey_listener = None
-        self._win_hotkey_hwnd = None
-        self._win_hotkey_id = None
-        self._win_hotkey_old_wndproc = None
-        self._win_hotkey_wndproc = None
+        self._hotkey_win32_registered.clear()
 
-        def try_install():
-            if self._install_win32_hotkey():
-                return
+        if sys.platform != "win32":
             self._install_pynput_hotkey()
+            return
 
-        self.after_idle(try_install)
+        self._hotkey_thread = threading.Thread(
+            target=self._win32_hotkey_thread_main,
+            name="win32-hotkey",
+            daemon=True,
+        )
+        self._hotkey_thread.start()
 
     def clear_content(self):
         for child in self.content.winfo_children():
             child.destroy()
         self.calibration_instruction_label = None
+        self.timer_label = None
+        self.calibration_xy_label = None
+        self.review_xy_label = None
+        self.review_neutral_label = None
+        self.xy_label = None
+        self.status_label = None
+        self.error_label = None
+        self.keyboard_label = None
+        self.movement_buttons = {}
+        self.com_power_labels = None
+        self.com_threshold_hint = None
+        self._com_font_targets = None
 
     def _on_canvas_configure(self, event):
         if event.widget is not self.canvas:
             return
         w = max(event.width, 1)
         h = max(event.height, 1)
-        cw = max(int(w * 0.94), 200)
-        ch = max(int(h * 0.94), 200)
+        cw = w
+        ch = h
         self.canvas.coords(self._content_window_id, w // 2, h // 2)
         self.canvas.itemconfig(self._content_window_id, width=cw, height=ch)
 
@@ -637,7 +657,7 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
 
-        if self.current_view == "calibration" and hasattr(self, "timer_label"):
+        if self.current_view == "calibration" and getattr(self, "timer_label", None):
             try:
                 if self.timer_label.winfo_exists():
                     self.timer_label.config(
@@ -646,10 +666,32 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
 
+        if self.current_view == "main":
+            ft = getattr(self, "_com_font_targets", None)
+            if ft:
+                try:
+                    tf = ("Segoe UI", max(9, int(11 * scale)), "bold")
+                    nf = ("Segoe UI", max(9, int(10 * scale)))
+                    vf = ("Segoe UI", max(9, int(10 * scale)), "bold")
+                    hf = ("Segoe UI", max(8, int(9 * scale)))
+                    if ft["title"].winfo_exists():
+                        ft["title"].config(font=tf)
+                    for lbl in ft["names"]:
+                        if lbl.winfo_exists():
+                            lbl.config(font=nf)
+                    for lbl in ft["values"]:
+                        if lbl.winfo_exists():
+                            lbl.config(font=vf)
+                    if ft["hint"].winfo_exists():
+                        ft["hint"].config(font=hf)
+                except tk.TclError:
+                    pass
+
     def show_main_view(self):
         self.current_view = "main"
         self.calibration_active = False
         self.clear_content()
+        self.com_powers = {a: 0.0 for a in COM_MAPPED_MENTAL_ACTIONS}
 
         error_bar = tk.Frame(self.content, bg=UI["bg_panel"])
         error_bar.pack(side="bottom", fill="x", padx=16, pady=(4, 12))
@@ -673,7 +715,7 @@ class App(tk.Tk):
 
         self.status_label = tk.Label(
             info_col,
-            text="Connessione...",
+            text="Connecting...",
             fg=UI["text_muted"],
             bg=UI["bg_panel"],
             font=ui_font(10),
@@ -694,7 +736,7 @@ class App(tk.Tk):
 
         self._make_button(
             btn_bar,
-            "Inizializza",
+            "Calibrate",
             self.show_calibration_view,
             primary=True,
             width=14,
@@ -702,7 +744,7 @@ class App(tk.Tk):
 
         self._make_button(
             btn_bar,
-            "Impostazioni",
+            "Settings",
             self.show_settings_view,
             width=14,
         ).pack(side="left")
@@ -710,18 +752,105 @@ class App(tk.Tk):
         main_body = tk.Frame(self.content, bg=UI["bg_panel"])
         main_body.pack(side="top", fill="both", expand=True)
 
-        self.create_movement_pad(main_body)
+        keyboard_row = tk.Frame(main_body, bg=UI["bg_panel"])
+        keyboard_row.pack(side="bottom", fill="x")
 
         self.keyboard_label = tk.Label(
-            main_body,
+            keyboard_row,
             text="",
             fg=UI["text_muted"],
             bg=UI["bg_panel"],
             font=ui_font(10),
         )
-        self.keyboard_label.pack(pady=(8, 14))
+        self.keyboard_label.pack(pady=(4, 10))
+
+        center_fill = tk.Frame(main_body, bg=UI["bg_panel"])
+        center_fill.pack(side="top", fill="both", expand=True)
+
+        center_row = tk.Frame(center_fill, bg=UI["bg_panel"])
+        center_row.place(relx=0.5, rely=0.5, anchor="center")
+
+        pad_host = tk.Frame(center_row, bg=UI["bg_panel"])
+        pad_host.pack(side="left")
+
+        self.create_movement_pad(pad_host)
+        self._create_com_power_panel(center_row)
+
+    def _create_com_power_panel(self, parent):
+        com_wrap = tk.Frame(
+            parent,
+            bg=UI["bg_panel"],
+            highlightthickness=1,
+            highlightbackground=UI["border"],
+            highlightcolor=UI["border"],
+        )
+        com_wrap.pack(side="left", padx=(14, 0))
+
+        title = tk.Label(
+            com_wrap,
+            text="COM power",
+            fg=UI["text_muted"],
+            bg=UI["bg_panel"],
+            font=ui_font(11, True),
+        )
+        title.pack(anchor="w", padx=10, pady=(10, 6))
+
+        inner = tk.Frame(com_wrap, bg=UI["bg_panel"])
+        inner.pack(fill="x", padx=4, pady=(0, 2))
+
+        self.com_power_labels = {}
+        name_labels = []
+        for cmd in COM_MAPPED_MENTAL_ACTIONS:
+            row = tk.Frame(inner, bg=UI["bg_panel"])
+            row.pack(fill="x")
+            nl = tk.Label(
+                row,
+                text=cmd,
+                fg=UI["text_dim"],
+                bg=UI["bg_panel"],
+                font=ui_font(10),
+                width=8,
+                anchor="w",
+            )
+            nl.pack(side="left", padx=(8, 4))
+            name_labels.append(nl)
+            vl = tk.Label(
+                row,
+                text="0.00",
+                fg=UI["text"],
+                bg=UI["bg_panel"],
+                font=ui_font(10, True),
+                width=5,
+                anchor="e",
+            )
+            vl.pack(side="right", padx=(4, 10))
+            self.com_power_labels[cmd] = vl
+
+        self.com_threshold_hint = tk.Label(
+            com_wrap,
+            text="",
+            fg=UI["text_dim"],
+            bg=UI["bg_panel"],
+            font=ui_font(8),
+        )
+        self.com_threshold_hint.pack(anchor="w", padx=10, pady=(2, 10))
+
+        self._com_font_targets = {
+            "title": title,
+            "names": name_labels,
+            "values": list(self.com_power_labels.values()),
+            "hint": self.com_threshold_hint,
+        }
 
     def show_calibration_view(self):
+        if not self.cortex.is_websocket_connected():
+            messagebox.showwarning(
+                "Cortex",
+                "Not connected to the Cortex WebSocket. "
+                "Start EMOTIV Launcher and ensure Cortex is reachable, then try again.",
+            )
+            return
+
         self.current_view = "calibration"
         self.clear_content()
 
@@ -731,7 +860,7 @@ class App(tk.Tk):
 
         tk.Label(
             self.content,
-            text="Inizializzazione",
+            text="Calibration",
             fg=UI["text"],
             bg=UI["bg_panel"],
             font=ui_font(20, True),
@@ -739,7 +868,7 @@ class App(tk.Tk):
 
         self.calibration_instruction_label = tk.Label(
             self.content,
-            text="Resta in posizione neutra per 10 secondi.",
+            text="Hold a neutral head position for 10 seconds.",
             fg=UI["text_muted"],
             bg=UI["bg_panel"],
             font=ui_font(11),
@@ -758,7 +887,7 @@ class App(tk.Tk):
 
         self.calibration_xy_label = tk.Label(
             self.content,
-            text="x medio=0 · y medio=0",
+            text="avg x=0 · avg y=0",
             fg=UI["text_muted"],
             bg=UI["bg_panel"],
             font=ui_font(11),
@@ -767,7 +896,7 @@ class App(tk.Tk):
 
         self._make_button(
             self.content,
-            "Annulla",
+            "Cancel",
             self.show_main_view,
             width=16,
         ).pack()
@@ -779,7 +908,7 @@ class App(tk.Tk):
 
         tk.Label(
             self.content,
-            text="Verifica configurazione",
+            text="Verify configuration",
             fg=UI["text"],
             bg=UI["bg_panel"],
             font=ui_font(19, True),
@@ -796,7 +925,7 @@ class App(tk.Tk):
 
         self.review_neutral_label = tk.Label(
             self.content,
-            text=f"Neutro x={self.pending_neutral_x:.2f} · y={self.pending_neutral_y:.2f}",
+            text=f"Neutral x={self.pending_neutral_x:.2f} · y={self.pending_neutral_y:.2f}",
             fg=UI["text_muted"],
             bg=UI["bg_panel"],
             font=ui_font(10),
@@ -810,14 +939,14 @@ class App(tk.Tk):
 
         self._make_button(
             button_row,
-            "Annulla",
+            "Cancel",
             self.show_main_view,
             width=10,
         ).grid(row=0, column=0, padx=5)
 
         self._make_button(
             button_row,
-            "Salva",
+            "Save",
             self.save_calibration,
             primary=True,
             width=10,
@@ -825,7 +954,7 @@ class App(tk.Tk):
 
         self._make_button(
             button_row,
-            "Riprova",
+            "Retry",
             self.show_calibration_view,
             width=10,
         ).grid(row=0, column=2, padx=5)
@@ -836,17 +965,21 @@ class App(tk.Tk):
 
         tk.Label(
             self.content,
-            text="Impostazioni",
+            text="Settings",
             fg=UI["text"],
             bg=UI["bg_panel"],
             font=ui_font(20, True),
         ).pack(pady=(24, 16))
 
+        form = tk.Frame(self.content, bg=UI["bg_panel"])
+        form.pack(pady=4, padx=12, fill="x")
+        form.columnconfigure(0, weight=1)
+
         keyboard_var = tk.BooleanVar(value=self.config_data.keyboard_enabled)
 
         keyboard_check = tk.Checkbutton(
-            self.content,
-            text="Abilita tastiera simulata",
+            form,
+            text="Enable simulated keyboard",
             variable=keyboard_var,
             fg=UI["text"],
             bg=UI["bg_panel"],
@@ -855,24 +988,21 @@ class App(tk.Tk):
             activeforeground=UI["text"],
             font=ui_font(11),
         )
-        keyboard_check.pack(anchor="w", padx=34, pady=(0, 8))
+        keyboard_check.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
 
         tk.Label(
-            self.content,
-            text="Scorciatoia: Ctrl + Shift + K",
+            form,
+            text="Shortcut: Ctrl + Shift + K · or Ctrl + Alt + K if the first is in use",
             fg=UI["text_muted"],
             bg=UI["bg_panel"],
             font=ui_font(10),
-        ).pack(anchor="w", padx=38, pady=(0, 16))
-
-        form = tk.Frame(self.content, bg=UI["bg_panel"])
-        form.pack(pady=4)
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 16))
 
         threshold_global_var = tk.BooleanVar(value=self.config_data.threshold_global)
 
         global_threshold_cb = tk.Checkbutton(
             form,
-            text="Soglia unica per tutti i movimenti",
+            text="Single threshold for all movements",
             variable=threshold_global_var,
             fg=UI["text"],
             bg=UI["bg_panel"],
@@ -881,17 +1011,17 @@ class App(tk.Tk):
             activeforeground=UI["text"],
             font=ui_font(11),
         )
-        global_threshold_cb.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 4))
+        global_threshold_cb.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 4))
 
         threshold_inner = tk.Frame(form, bg=UI["bg_panel"])
-        threshold_inner.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=4)
+        threshold_inner.grid(row=3, column=0, columnspan=2, sticky="ew", padx=0, pady=4)
 
         threshold_var = tk.DoubleVar(value=self.config_data.threshold)
 
         global_thr_row = tk.Frame(threshold_inner, bg=UI["bg_panel"])
         tk.Label(
             global_thr_row,
-            text="Soglia movimenti",
+            text="Movement threshold",
             fg=UI["text"],
             bg=UI["bg_panel"],
             font=ui_font(11),
@@ -915,7 +1045,7 @@ class App(tk.Tk):
             )
             tk.Label(
                 per_thr_frame,
-                text=f"Soglia {MOVEMENTS[movement]['ui_name']} ({MOVEMENTS[movement]['label']})",
+                text=f"{MOVEMENTS[movement]['ui_name']} threshold ({MOVEMENTS[movement]['label']})",
                 fg=UI["text"],
                 bg=UI["bg_panel"],
                 font=ui_font(11),
@@ -944,11 +1074,11 @@ class App(tk.Tk):
 
         tk.Label(
             form,
-            text="Soglia potenza com",
+            text="Mental command power threshold",
             fg=UI["text"],
             bg=UI["bg_panel"],
             font=ui_font(11),
-        ).grid(row=2, column=0, sticky="w", padx=6, pady=8)
+        ).grid(row=4, column=0, sticky="w", padx=6, pady=8)
 
         com_var = tk.DoubleVar(value=self.config_data.com_power_threshold)
 
@@ -961,7 +1091,7 @@ class App(tk.Tk):
             width=8,
             style="Dark.TSpinbox",
         )
-        com_spin.grid(row=2, column=1, padx=6, pady=8)
+        com_spin.grid(row=4, column=1, padx=6, pady=8)
 
         def save_settings():
             self.config_data.keyboard_enabled = bool(keyboard_var.get())
@@ -978,14 +1108,14 @@ class App(tk.Tk):
 
         self._make_button(
             button_row,
-            "Indietro",
+            "Back",
             self.show_main_view,
             width=12,
         ).grid(row=0, column=0, padx=6)
 
         self._make_button(
             button_row,
-            "Salva",
+            "Save",
             save_settings,
             primary=True,
             width=12,
@@ -1042,7 +1172,14 @@ class App(tk.Tk):
 
         if isinstance(msg.get("com"), list):
             has_input = True
-            detected.update(self.map_mental_command(msg["com"]))
+            com = msg["com"]
+            action = str(com[0] or "neutral").lower()
+            power = float(com[1] or 0)
+            for k in self.com_powers:
+                self.com_powers[k] = 0.0
+            if action in self.com_powers:
+                self.com_powers[action] = power
+            detected.update(self.map_mental_command(com))
 
         if not has_input:
             return
@@ -1084,7 +1221,7 @@ class App(tk.Tk):
         return movements
 
     def map_mental_command(self, com: list) -> set:
-        action = str(com[0] or "neutral")
+        action = str(com[0] or "neutral").lower()
         power = float(com[1] or 0)
 
         if power < self.config_data.com_power_threshold:
@@ -1117,20 +1254,44 @@ class App(tk.Tk):
 
         xy_text = f"x={self.current_x:.2f} · y={self.current_y:.2f}"
 
-        if hasattr(self, "xy_label"):
+        xy = getattr(self, "xy_label", None)
+        if xy is not None:
             self.xy_label.config(text=xy_text)
 
-        if hasattr(self, "review_xy_label"):
+        rxy = getattr(self, "review_xy_label", None)
+        if rxy is not None:
             self.review_xy_label.config(text=xy_text)
 
-        if hasattr(self, "keyboard_label"):
+        kbd = getattr(self, "keyboard_label", None)
+        if kbd is not None:
             self.keyboard_label.config(
                 text=(
-                    "Tastiera simulata: attiva"
+                    "Simulated keyboard: on"
                     if self.config_data.keyboard_enabled
-                    else "Tastiera simulata: disattivata"
+                    else "Simulated keyboard: off"
                 )
             )
+
+        if self.current_view == "main" and getattr(self, "com_power_labels", None):
+            thr = float(self.config_data.com_power_threshold)
+            hint = getattr(self, "com_threshold_hint", None)
+            if hint is not None:
+                try:
+                    if hint.winfo_exists():
+                        hint.config(text=f"Activate if power ≥ {thr:.2f}")
+                except tk.TclError:
+                    pass
+            for cmd, lab in self.com_power_labels.items():
+                try:
+                    if not lab.winfo_exists():
+                        continue
+                except tk.TclError:
+                    continue
+                p = float(self.com_powers.get(cmd, 0.0))
+                lab.config(
+                    text=f"{p:.2f}",
+                    fg=UI["accent_strong"] if p >= thr else UI["text"],
+                )
 
         for movement, btn in self.movement_buttons.items():
             if movement in self.active_movements:
@@ -1150,20 +1311,22 @@ class App(tk.Tk):
             elapsed = time.time() - self.calibration_started_at
             remaining = max(0, 10 - elapsed)
 
-            self.timer_label.config(text=str(int(remaining) + 1 if remaining > 0 else 0))
+            tl = getattr(self, "timer_label", None)
+            if tl is not None:
+                tl.config(text=str(int(remaining) + 1 if remaining > 0 else 0))
 
             if self.calibration_samples:
                 avg_x = sum(x for x, _ in self.calibration_samples) / len(self.calibration_samples)
                 avg_y = sum(y for _, y in self.calibration_samples) / len(self.calibration_samples)
                 self.calibration_xy_label.config(
-                    text=f"x medio={avg_x:.2f} · y medio={avg_y:.2f}"
+                    text=f"avg x={avg_x:.2f} · avg y={avg_y:.2f}"
                 )
 
             if elapsed >= 10:
                 if not self.calibration_samples:
                     messagebox.showerror(
-                        "Errore",
-                        "Nessun dato ricevuto durante la calibrazione.",
+                        "Error",
+                        "No motion data received during calibration.",
                     )
                     self.show_main_view()
                     return
@@ -1250,19 +1413,40 @@ class App(tk.Tk):
 
         try:
             while True:
+                cmd = self._hotkey_control_queue.get_nowait()
+                if cmd == "fallback_pynput":
+                    self._install_pynput_hotkey()
+                elif cmd == "hint_ctrl_alt_k":
+                    self.status_queue.put(
+                        "Keyboard shortcut is Ctrl+Alt+K (Ctrl+Shift+K is reserved by another app)."
+                    )
+        except Empty:
+            pass
+
+        try:
+            while True:
+                self.keyboard_shortcut_queue.get_nowait()
+                self._toggle_keyboard_via_shortcut()
+        except Empty:
+            pass
+
+        try:
+            while True:
                 status = self.status_queue.get_nowait()
-                if hasattr(self, "status_label"):
+                if getattr(self, "status_label", None) is not None:
                     self.status_label.config(text=status)
-                if hasattr(self, "error_label"):
-                    self.error_label.config(text="")
+                err = getattr(self, "error_label", None)
+                if err is not None:
+                    err.config(text="")
         except Empty:
             pass
 
         try:
             while True:
                 error = self.error_queue.get_nowait()
-                if hasattr(self, "error_label"):
-                    self.error_label.config(text=error)
+                err = getattr(self, "error_label", None)
+                if err is not None:
+                    err.config(text=error)
                 print(error)
         except Empty:
             pass
@@ -1278,31 +1462,28 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        if getattr(self, "_win_hotkey_hwnd", None):
+        if (
+            sys.platform == "win32"
+            and self._hotkey_thread is not None
+            and self._hotkey_win32_registered.is_set()
+            and self._hotkey_thread.is_alive()
+        ):
             import ctypes
             from ctypes import wintypes
 
+            WM_QUIT = 0x0012
             user32 = ctypes.WinDLL("user32", use_last_error=True)
-            GWL_WNDPROC = -4
-            hwnd = self._win_hotkey_hwnd
-            try:
-                user32.UnregisterHotKey(hwnd, self._win_hotkey_id)
-            except Exception:
-                pass
-            try:
-                user32.SetWindowLongPtrW.argtypes = [
-                    wintypes.HWND,
-                    ctypes.c_int,
-                    wintypes.LONG_PTR,
-                ]
-                user32.SetWindowLongPtrW.restype = wintypes.LONG_PTR
-                user32.SetWindowLongPtrW(
-                    hwnd, GWL_WNDPROC, self._win_hotkey_old_wndproc
+            tid = self._hotkey_thread.ident
+            if tid is not None:
+                user32.PostThreadMessageW(
+                    wintypes.DWORD(tid), WM_QUIT, 0, 0
                 )
-            except Exception:
-                pass
-            self._win_hotkey_hwnd = None
-        elif self.hotkey_listener is not None:
+            self._hotkey_thread.join(timeout=3.0)
+
+        self._hotkey_thread = None
+        self._hotkey_win32_registered.clear()
+
+        if self.hotkey_listener is not None:
             try:
                 self.hotkey_listener.stop()
             except Exception:
