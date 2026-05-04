@@ -53,6 +53,46 @@ def test_load_config_corrupt_json(monkeypatch, tmp_path):
     assert cfg.neutral_x is None
 
 
+def test_load_config_clears_legacy_neutral_outside_degree_range(monkeypatch, tmp_path):
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "neutral_x": 49.826,
+                "neutral_y": -1.12,
+                "threshold": 10.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    cfg = app_module.load_config()
+    assert cfg.neutral_x is None
+    assert cfg.neutral_y is None
+
+
+def test_load_config_keeps_neutral_within_degree_range(monkeypatch, tmp_path):
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "neutral_x": 2.5,
+                "neutral_y": -1.1,
+                "threshold": 10.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    cfg = app_module.load_config()
+    assert cfg.neutral_x == pytest.approx(2.5)
+    assert cfg.neutral_y == pytest.approx(-1.1)
+
+
 def test_load_config_ignores_unknown_json_keys(monkeypatch, tmp_path):
     import app as app_module
 
@@ -103,3 +143,42 @@ def test_appconfig_partial_movement_thresholds_use_base():
     assert cfg.movement_thresholds["backward"] == 10.0
     assert cfg.movement_thresholds["left"] == 10.0
     assert cfg.movement_thresholds["right"] == 10.0
+
+
+def test_appconfig_unknown_tilt_mode_coerced_to_euler():
+    from app import AppConfig
+
+    cfg = AppConfig(tilt_mode="not_a_mode")
+    assert cfg.tilt_mode == "euler"
+
+
+def test_load_save_tilt_mode_round_trip(monkeypatch, tmp_path):
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    original = app_module.AppConfig(tilt_mode="horizontal_projection")
+    app_module.save_config(original)
+    loaded = app_module.load_config()
+    assert loaded.tilt_mode == "horizontal_projection"
+
+
+def test_sanitize_legacy_neutral_skipped_when_not_euler(monkeypatch, tmp_path):
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "neutral_x": 49.826,
+                "neutral_y": -1.12,
+                "tilt_mode": "horizontal_projection",
+                "threshold": 10.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    cfg = app_module.load_config()
+    assert cfg.neutral_x == pytest.approx(49.826)
+    assert cfg.neutral_y == pytest.approx(-1.12)

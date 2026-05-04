@@ -57,7 +57,7 @@ def _config_path() -> Path:
     return CONFIG_PATH
 
 
-DEFAULT_THRESHOLD = 5.0
+DEFAULT_THRESHOLD = 10.0
 DEFAULT_COM_POWER_THRESHOLD = 0.25
 DEFAULT_COM_KEY_BINDINGS = {
     "push": "q",
@@ -115,6 +115,8 @@ MOVEMENTS = {
 class AppConfig:
     neutral_x: Optional[float] = None
     neutral_y: Optional[float] = None
+    # "euler" = pitch/roll from ACC or quaternion; "horizontal_projection" = bubble-style ACC pair.
+    tilt_mode: str = "euler"
     threshold: float = DEFAULT_THRESHOLD
     threshold_global: bool = True
     movement_thresholds: dict = field(default_factory=dict)
@@ -131,6 +133,8 @@ class AppConfig:
     emotiv_debit: int = 1
 
     def __post_init__(self):
+        if self.tilt_mode not in ("euler", "horizontal_projection"):
+            self.tilt_mode = "euler"
         if self.key_bindings is None:
             self.key_bindings = {
                 movement: data["default_key"]
@@ -162,6 +166,16 @@ class AppConfig:
                 self.emotiv_debit = 1
 
 
+def _sanitize_legacy_neutral_for_degrees(cfg: AppConfig) -> None:
+    """Clear neutrals from pre-degree tilt calibration (magnetometer-scale ~50 on pitch)."""
+    if getattr(cfg, "tilt_mode", "euler") != "euler":
+        return
+    nx = cfg.neutral_x
+    if nx is not None and (nx > 35.0 or nx < -35.0):
+        cfg.neutral_x = None
+        cfg.neutral_y = None
+
+
 def load_config() -> AppConfig:
     path = _config_path()
     if not path.exists():
@@ -173,7 +187,9 @@ def load_config() -> AppConfig:
             return AppConfig()
         allowed = {f.name for f in fields(AppConfig)}
         filtered = {k: v for k, v in raw.items() if k in allowed}
-        return AppConfig(**filtered)
+        cfg = AppConfig(**filtered)
+        _sanitize_legacy_neutral_for_degrees(cfg)
+        return cfg
     except Exception:
         return AppConfig()
 

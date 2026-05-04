@@ -43,10 +43,20 @@ from bridge_core import (
     save_config,
 )
 from core import compute_motion_movements, mot_to_tilt_xy
+
+
+def _tilt_axis_labels(tilt_mode: str) -> tuple[str, str]:
+    """Short names for live motion readouts (pitch/roll vs horizontal-plane degrees)."""
+    if tilt_mode == "horizontal_projection":
+        return "hx", "hy"
+    return "pitch", "roll"
 from update_service import semver_less
 
 _CROSS = "#6b7280"
 _DOT = "#14b8a6"
+_DOT_BORDER = "#64748b"
+_AIM_FRAME = "#52525b"
+_AIM_BOX_FRACTION = 0.46
 
 
 def _action_btn_style(*, gap_after: bool = False) -> Pack:
@@ -173,6 +183,12 @@ class EmotivBridgeApp(toga.App):
                 order=10,
             ),
             toga.Command(
+                self.retry_connection,
+                text="Reconnect headset",
+                group=toga.Group.FILE,
+                order=15,
+            ),
+            toga.Command(
                 self.show_settings_view,
                 text="Settings",
                 group=toga.Group.FILE,
@@ -223,6 +239,15 @@ class EmotivBridgeApp(toga.App):
     def _on_cross_resize(self, widget: toga.Canvas, width: int, height: int, **kwargs: Any) -> None:
         self._cross_w = max(width, 1)
         self._cross_h = max(height, 1)
+
+    def _sync_crosshair_visibility(self) -> None:
+        """Hide the aim preview on Settings (including Environment variables); restore elsewhere."""
+        if self.cross_canvas is None:
+            return
+        if self.current_view in ("settings", "env_settings"):
+            self.cross_canvas.style.update(visibility=HIDDEN, height=0, flex=0)
+        else:
+            self.cross_canvas.style.update(visibility=VISIBLE, height=140, flex=0)
 
     def _pynput_keyboard(self):
         from pynput import keyboard as pynput_keyboard
@@ -454,8 +479,9 @@ class EmotivBridgeApp(toga.App):
         top.add(info)
         self.status_label = toga.Label("Connecting...", style=Pack(color="#6b7280", font_size=11))
         info.add(self.status_label)
+        lx, ly = _tilt_axis_labels(self.config_data.tilt_mode)
         self.xy_label = toga.Label(
-            "pitch=0.00° · roll=0.00°", style=Pack(padding_top=6, font_size=12)
+            f"{lx}=0.00° · {ly}=0.00°", style=Pack(padding_top=6, font_size=12)
         )
         info.add(self.xy_label)
 
@@ -495,6 +521,8 @@ class EmotivBridgeApp(toga.App):
         self.keyboard_label = toga.Label("", style=Pack(color="#6b7280", font_size=11, padding=8))
         body.add(self.keyboard_label)
 
+        self._sync_crosshair_visibility()
+
     def _on_calibrate_pressed(self, widget: Optional[toga.Widget] = None) -> None:
         if self.cortex is None or not self.cortex.is_websocket_connected():
             self.main_window.info_dialog(
@@ -526,8 +554,9 @@ class EmotivBridgeApp(toga.App):
         self.timer_label = toga.Label("10", style=Pack(font_size=40, font_weight="bold", color="#14b8a6", padding_bottom=12))
         ph.add(self.timer_label)
 
+        ax, ay = _tilt_axis_labels(self.config_data.tilt_mode)
         self.calibration_xy_label = toga.Label(
-            "avg pitch=0.00° · avg roll=0.00°",
+            f"avg {ax}=0.00° · avg {ay}=0.00°",
             style=Pack(color="#6b7280", padding_bottom=20),
         )
         ph.add(self.calibration_xy_label)
@@ -543,6 +572,8 @@ class EmotivBridgeApp(toga.App):
             )
         )
 
+        self._sync_crosshair_visibility()
+
     def show_calibration_review_view(self) -> None:
         self.current_view = "calibration_review"
         self.calibration_active = False
@@ -551,12 +582,13 @@ class EmotivBridgeApp(toga.App):
         ph = self.panel_host
 
         ph.add(toga.Label("Verify configuration", style=Pack(font_size=20, font_weight="bold", padding_top=16, padding_bottom=8)))
+        rx, ry = _tilt_axis_labels(self.config_data.tilt_mode)
         self.review_xy_label = toga.Label(
-            "pitch=0.00° · roll=0.00°", style=Pack(padding_bottom=6)
+            f"{rx}=0.00° · {ry}=0.00°", style=Pack(padding_bottom=6)
         )
         ph.add(self.review_xy_label)
         self.review_neutral_label = toga.Label(
-            f"Neutral pitch={self.pending_neutral_x:.2f}° · roll={self.pending_neutral_y:.2f}°",
+            f"Neutral {rx}={self.pending_neutral_x:.2f}° · {ry}={self.pending_neutral_y:.2f}°",
             style=Pack(color="#6b7280", padding_bottom=10),
         )
         ph.add(self.review_neutral_label)
@@ -582,6 +614,8 @@ class EmotivBridgeApp(toga.App):
         )
         row.add(toga.Button("Save", on_press=lambda w: self.save_calibration(), style=_action_btn_style()))
 
+        self._sync_crosshair_visibility()
+
     def save_calibration(self, widget: Optional[toga.Widget] = None) -> None:
         self.config_data.neutral_x = self.pending_neutral_x
         self.config_data.neutral_y = self.pending_neutral_y
@@ -605,12 +639,21 @@ class EmotivBridgeApp(toga.App):
             ),
         )
 
-        screen.add(
+        title_row = toga.Box(style=Pack(direction=ROW, alignment=CENTER, padding_bottom=12))
+        title_row.add(
             toga.Label(
                 "Settings",
-                style=Pack(font_size=22, font_weight="bold", padding_bottom=12),
+                style=Pack(font_size=22, font_weight="bold", flex=1),
             )
         )
+        title_row.add(
+            toga.Button(
+                "Close",
+                on_press=lambda w: self.show_main_view(),
+                style=Pack(font_size=13, padding_left=12, padding_right=12, padding_top=6, padding_bottom=6),
+            )
+        )
+        screen.add(title_row)
 
         form = toga.Box(style=Pack(direction=COLUMN))
         screen.add(form)
@@ -638,6 +681,22 @@ class EmotivBridgeApp(toga.App):
             )
         )
 
+        tilt_mode_ids = ["euler", "horizontal_projection"]
+        tilt_mode_titles = [
+            "Euler pitch/roll (default)",
+            "ACC horizontal plane (bubble-style; recalibrate after change)",
+        ]
+        tilt_sel = toga.Selection(
+            items=tilt_mode_titles,
+            style=Pack(padding_bottom=8),
+        )
+        try:
+            tilt_sel.value = tilt_mode_titles[tilt_mode_ids.index(self.config_data.tilt_mode)]
+        except ValueError:
+            tilt_sel.value = tilt_mode_titles[0]
+        form.add(toga.Label("Head tilt from motion", style=Pack(font_weight="bold", padding_top=4)))
+        form.add(tilt_sel)
+
         tg_sw = toga.Switch("Single threshold for all movements", value=self.config_data.threshold_global)
         form.add(tg_sw)
 
@@ -645,7 +704,7 @@ class EmotivBridgeApp(toga.App):
         form.add(threshold_host)
 
         global_row = toga.Box(style=Pack(direction=ROW, padding_top=6))
-        global_row.add(toga.Label("Movement threshold", style=Pack(flex=1)))
+        global_row.add(toga.Label("Movement threshold (degrees)", style=Pack(flex=1)))
         thr_global = toga.NumberInput(
             min=1,
             max=50,
@@ -661,7 +720,7 @@ class EmotivBridgeApp(toga.App):
             row = toga.Box(style=Pack(direction=ROW, padding_top=4))
             row.add(
                 toga.Label(
-                    f"{MOVEMENTS[movement]['ui_name']} threshold ({MOVEMENTS[movement]['label']})",
+                    f"{MOVEMENTS[movement]['ui_name']} threshold ({MOVEMENTS[movement]['label']}, degrees)",
                     style=Pack(flex=1),
                 )
             )
@@ -720,6 +779,12 @@ class EmotivBridgeApp(toga.App):
         def save_settings(widget: Optional[toga.Widget] = None) -> None:
             self.config_data.keyboard_enabled = bool(kb_sw.value)
             self.config_data.debug_mode = bool(debug_sw.value)
+            try:
+                self.config_data.tilt_mode = tilt_mode_ids[
+                    tilt_mode_titles.index(str(tilt_sel.value))
+                ]
+            except (ValueError, IndexError):
+                self.config_data.tilt_mode = "euler"
             self.config_data.threshold_global = bool(tg_sw.value)
             self.config_data.threshold = float(thr_global.value)
             for m, inp in per_inputs.items():
@@ -758,6 +823,8 @@ class EmotivBridgeApp(toga.App):
         br.add(toga.Button("Save", on_press=save_settings, style=_action_btn_style()))
 
         ph.add(screen)
+
+        self._sync_crosshair_visibility()
 
     def show_env_settings_view(self, widget: Optional[toga.Widget] = None) -> None:
         self.current_view = "env_settings"
@@ -815,6 +882,8 @@ class EmotivBridgeApp(toga.App):
         )
         br.add(toga.Button("Save", on_press=save_env, style=_action_btn_style()))
 
+        self._sync_crosshair_visibility()
+
     def process_stream_message(self, msg: dict) -> None:
         has_input = False
         motion_detected: set[str] = set()
@@ -826,7 +895,9 @@ class EmotivBridgeApp(toga.App):
             mot = msg["mot"]
             if len(mot) >= 2:
                 mot_cols = self.cortex.mot_cols if self.cortex is not None else None
-                self.current_x, self.current_y = mot_to_tilt_xy(mot, mot_cols)
+                self.current_x, self.current_y = mot_to_tilt_xy(
+                    mot, mot_cols, tilt_mode=self.config_data.tilt_mode
+                )
                 motion_detected.update(self.map_motion(self.current_x, self.current_y))
 
         if isinstance(msg.get("com"), list):
@@ -886,6 +957,8 @@ class EmotivBridgeApp(toga.App):
     def draw_crosshair(self) -> None:
         if self.cross_canvas is None:
             return
+        if self.current_view in ("settings", "env_settings"):
+            return
         width = float(self._cross_w)
         height = float(self._cross_h)
         cx = width / 2
@@ -902,27 +975,39 @@ class EmotivBridgeApp(toga.App):
             dy = self.current_x - float(neutral_x)
 
         scale = 7.0
-        max_radius_x = width * 0.38
-        max_radius_y = height * 0.38
-        px = cx + max(-max_radius_x, min(max_radius_x, dx * scale))
-        py = cy + max(-max_radius_y, min(max_radius_y, dy * scale))
-
-        arm = max(16.0, min(width, height) / 22.0)
-        dot_r = max(6.0, min(width, height) / 55.0)
+        max_radius_x = width * _AIM_BOX_FRACTION
+        max_radius_y = height * _AIM_BOX_FRACTION
+        aim_half = min(max_radius_x, max_radius_y)
+        side_len = 2.0 * aim_half
+        px = cx + max(-aim_half, min(aim_half, dx * scale))
+        py = cy + max(-aim_half, min(aim_half, dy * scale))
 
         ctx = self.cross_canvas.context
         ctx.clear()
+        with ctx.Stroke(color=_AIM_FRAME, line_width=1.0) as frame:
+            frame.rect(cx - aim_half, cy - aim_half, side_len, side_len)
+
+        arm = max(16.0, min(width, height) / 22.0)
+        dot_r = max(6.0, min(width, height) / 55.0)
+        side = 2.0 * dot_r
+        half = side / 2.0
+        qx = px - half
+        qy = py - half
+
         with ctx.Stroke(cx - arm, cy, color=_CROSS, line_width=2) as h:
             h.line_to(cx + arm, cy)
         with ctx.Stroke(cx, cy - arm, color=_CROSS, line_width=2) as v:
             v.line_to(cx, cy + arm)
         with ctx.Fill(color=_DOT) as fill:
-            fill.arc(x=px, y=py, radius=dot_r)
+            fill.rect(qx, qy, side, side)
+        with ctx.Stroke(color=_DOT_BORDER, line_width=1.0) as border:
+            border.rect(qx, qy, side, side)
 
     def update_ui(self) -> None:
         self.draw_crosshair()
 
-        xy_text = f"pitch={self.current_x:.2f}° · roll={self.current_y:.2f}°"
+        tx, ty = _tilt_axis_labels(self.config_data.tilt_mode)
+        xy_text = f"{tx}={self.current_x:.2f}° · {ty}={self.current_y:.2f}°"
         if self.xy_label is not None:
             self.xy_label.text = xy_text
         if self.review_xy_label is not None:
@@ -965,8 +1050,9 @@ class EmotivBridgeApp(toga.App):
             if self.calibration_samples and self.calibration_xy_label is not None:
                 avg_x = sum(x for x, _ in self.calibration_samples) / len(self.calibration_samples)
                 avg_y = sum(y for _, y in self.calibration_samples) / len(self.calibration_samples)
+                axn, ayn = _tilt_axis_labels(self.config_data.tilt_mode)
                 self.calibration_xy_label.text = (
-                    f"avg pitch={avg_x:.2f}° · avg roll={avg_y:.2f}°"
+                    f"avg {axn}={avg_x:.2f}° · avg {ayn}={avg_y:.2f}°"
                 )
 
             if elapsed >= 10:

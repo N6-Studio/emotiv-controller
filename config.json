@@ -1,13 +1,14 @@
 {
-  "neutral_x": 49.826001818181815,
-  "neutral_y": -1.120780909090909,
-  "threshold": 5.0,
+  "neutral_x": 0.0,
+  "neutral_y": 0.0,
+  "tilt_mode": "euler",
+  "threshold": 10.0,
   "threshold_global": true,
   "movement_thresholds": {
-    "forward": 5.0,
-    "left": 5.0,
-    "backward": 5.0,
-    "right": 5.0
+    "forward": 10.0,
+    "left": 10.0,
+    "backward": 10.0,
+    "right": 10.0
   },
   "keyboard_enabled": false,
   "debug_mode": false,

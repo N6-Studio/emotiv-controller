@@ -1,9 +1,27 @@
-"""Pure movement / mental-command logic (no UI, I/O, or hardware)."""
+"""Pure movement / mental-command logic (no UI, I/O, or hardware).
+
+Accelerometer (``ACCX``/``ACCY``/``ACCZ``) semantics for tilt:
+
+- Cortex exposes motion in the ``mot`` stream; column order for newer headsets
+  matches ``_MOT_COLS_12`` (see Emotiv Cortex *Data Subscription* /
+  *Motion* docs on https://emotiv.gitbook.io/cortex-api/ ).
+- Public docs do not spell out every axis sign relative to the wearer's nose/ears;
+  headband placement (e.g. EPOC X back vs top) can change the sensor frame
+  relative to the head—validate with your headset if lean feels inverted.
+- We treat the sample as **specific force** (gravity + motion); static head lean
+  is inferred from the **direction** of the vector (``atan2`` ratios scale out
+  uniform gain).
+
+See ``accel_to_pitch_roll`` (Euler-style) vs ``accel_to_horizontal_projection_deg``
+(bubble-style projection onto the nominal ZX/ZY planes).
+"""
 
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
+
+TiltMode = Literal["euler", "horizontal_projection"]
 
 # Default Cortex ``mot`` layout when ``cols`` is unavailable (newer headsets: quaternion + ACC + MAG).
 _MOT_COLS_12 = (
@@ -74,14 +92,64 @@ def quaternion_to_pitch_roll(
 
 
 def accel_to_pitch_roll(ax: float, ay: float, az: float) -> tuple[float, float]:
-    """Accelerometer-based tilt; returns (pitch, roll) in radians when static."""
+    """Accelerometer-based tilt; returns (pitch, roll) in radians when static.
+
+    Pitch is nose-down positive in this decomposition; roll is ``atan2(ay, az)``.
+    Same ACC frame as :func:`accel_to_horizontal_projection_deg`; verify signs
+    against your headset if forward/back feel swapped.
+    """
     pitch = math.atan2(-ax, math.hypot(ay, az))
     roll = math.atan2(ay, az)
     return pitch, roll
 
 
+def _normalize_specific_force(ax: float, ay: float, az: float) -> tuple[float, float, float] | None:
+    n = math.sqrt(ax * ax + ay * ay + az * az)
+    if not math.isfinite(n) or n < 1e-15:
+        return None
+    return ax / n, ay / n, az / n
+
+
+def accel_to_horizontal_projection_deg(ax: float, ay: float, az: float) -> tuple[float, float]:
+    """Two-angle tilt from ACC direction using ZX and ZY planes (degrees).
+
+    After unit-normalizing ``(ax, ay, az)`` as specific force, returns
+    ``(atan2(nx, nz), atan2(ny, nz))`` in degrees. When ``|nz|`` is dominant at
+    upright, this acts like a **bubble level** in X and Z and in Y and Z, with
+    different coupling than Euler ``accel_to_pitch_roll``. Use for thresholds
+    via the same neutral + ``compute_motion_movements`` pipeline when
+    ``tilt_mode="horizontal_projection"`` (recalibrate neutral in that mode).
+    """
+    u = _normalize_specific_force(ax, ay, az)
+    if u is None:
+        return 0.0, 0.0
+    nx, ny, nz = u
+    return math.degrees(math.atan2(nx, nz)), math.degrees(math.atan2(ny, nz))
+
+
+def accel_to_horizontal_polar_deg(ax: float, ay: float, az: float) -> tuple[float, float]:
+    """Azimuth and tilt magnitude (degrees) from horizontal gravity slice.
+
+    Unit ``n = (ax,ay,az)/|a|``; ``h = hypot(nx, ny)``; returns
+    ``(atan2(ny, nx)°, atan2(h, |nz|)°)``. Handy for diagnostics; movement
+    thresholds still use :func:`mot_to_tilt_xy` with ``horizontal_projection``
+    unless you wire this in yourself.
+    """
+    u = _normalize_specific_force(ax, ay, az)
+    if u is None:
+        return 0.0, 0.0
+    nx, ny, nz = u
+    h = math.hypot(nx, ny)
+    azimuth = math.degrees(math.atan2(ny, nx))
+    tilt = math.degrees(math.atan2(h, abs(nz)))
+    return azimuth, tilt
+
+
 def _tilt_from_cols(
-    mot: list[Any], cols: list[str]
+    mot: list[Any],
+    cols: list[str],
+    *,
+    tilt_mode: TiltMode = "euler",
 ) -> tuple[float, float] | None:
     if len(cols) != len(mot):
         return None
@@ -92,6 +160,8 @@ def _tilt_from_cols(
         ay = _float_at(mot, idx["ACCY"])
         az = _float_at(mot, idx["ACCZ"])
         if all(math.isfinite(v) for v in (ax, ay, az)):
+            if tilt_mode == "horizontal_projection":
+                return accel_to_horizontal_projection_deg(ax, ay, az)
             p, r = accel_to_pitch_roll(ax, ay, az)
             return math.degrees(p), math.degrees(r)
     if all(k in idx for k in ("Q0", "Q1", "Q2", "Q3")):
@@ -105,26 +175,37 @@ def _tilt_from_cols(
     return None
 
 
-def mot_to_tilt_xy(mot: list[Any], cols: list[str] | None) -> tuple[float, float]:
-    """Map a Cortex ``mot`` array to (pitch°, roll°) for head lean.
+def mot_to_tilt_xy(
+    mot: list[Any],
+    cols: list[str] | None,
+    *,
+    tilt_mode: TiltMode = "euler",
+) -> tuple[float, float]:
+    """Map a Cortex ``mot`` array to ``(x°, y°)`` for head lean / thresholds.
 
-    Uses ``ACCX/Y/Z`` first when present (gravity tilt); otherwise quaternion
-    ``Q0``–``Q3``. When no column metadata is available, 12- and 11-length arrays
-    use the standard Insight layouts from the Cortex API docs; shorter arrays keep
-    the previous ``mot[-2]``, ``mot[-1]`` convention (synthetic / dev servers).
+    ``tilt_mode="euler"`` (default): ``ACCX/Y/Z`` → pitch/roll via
+    :func:`accel_to_pitch_roll`; else quaternion ``Q0``–``Q3``.
+
+    ``tilt_mode="horizontal_projection"``: finite ACC →
+    :func:`accel_to_horizontal_projection_deg`; quaternion fallback is still
+    Euler pitch/roll (fusion frame), so prefer this mode when ACC is reliable.
+
+    When no column metadata is available, 12- and 11-length arrays use the
+    standard Insight layouts from the Cortex API docs; shorter arrays keep the
+    previous ``mot[-2]``, ``mot[-1]`` convention (synthetic / dev servers).
     """
     if not mot or len(mot) < 2:
         return 0.0, 0.0
     if cols is not None:
-        out = _tilt_from_cols(mot, cols)
+        out = _tilt_from_cols(mot, cols, tilt_mode=tilt_mode)
         if out is not None:
             return out
     if len(mot) == 12:
-        out = _tilt_from_cols(mot, list(_MOT_COLS_12))
+        out = _tilt_from_cols(mot, list(_MOT_COLS_12), tilt_mode=tilt_mode)
         if out is not None:
             return out
     if len(mot) == 11:
-        out = _tilt_from_cols(mot, list(_MOT_COLS_11))
+        out = _tilt_from_cols(mot, list(_MOT_COLS_11), tilt_mode=tilt_mode)
         if out is not None:
             return out
     return float(mot[-2] or 0), float(mot[-1] or 0)

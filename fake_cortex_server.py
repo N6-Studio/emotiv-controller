@@ -2,7 +2,10 @@
 Minimal fake EMOTIV Cortex WebSocket for manual testing of the Movement Bridge.
 
 Emits the same JSON-RPC responses as Cortex for requestAccess → subscribe, then
-pushes synthetic ``mot`` (and optionally ``com``) stream frames.
+pushes synthetic ``mot`` (and optionally ``com``) stream frames. For a few seconds
+after streaming starts, ACC is upright (no lean) for calibration, then ``mot`` ACC
+follows a smooth circle in pitch/roll so lean cycles **forward → right → backward →
+left** with constant outward tilt magnitude.
 
 Setup::
 
@@ -31,6 +34,18 @@ import sys
 from typing import Any
 
 import websockets
+
+
+def _client_addr(websocket: Any) -> str:
+    try:
+        host, port = websocket.remote_address  # type: ignore[attr-defined]
+        return f"{host}:{port}"
+    except Exception:
+        return "unknown"
+
+
+def _log_event(prefix: str, message: str) -> None:
+    print(f"[fake-cortex {prefix}] {message}", flush=True)
 
 
 def _rpc_result(req_id: int, result: Any) -> dict:
@@ -75,19 +90,69 @@ def _handle_method(method: str, _params: dict) -> dict:
     return {}
 
 
-async def _stream_loop(websocket: Any, interval: float, include_com: bool) -> None:
-    """Send mot (and optionally com) messages until the connection dies."""
+def _acc_from_pitch_roll_rad(pitch_rad: float, roll_rad: float) -> tuple[float, float, float]:
+    """Build ACC consistent with ``core.accel_to_pitch_roll`` inverse (az=1 baseline)."""
+    az = 1.0
+    ay = math.tan(roll_rad) * az
+    h = math.hypot(ay, az)
+    ax = -math.tan(pitch_rad) * h
+    return ax, ay, az
+
+
+# Upright / no lean → ~0° pitch and roll in ``mot_to_tilt_xy`` (ACC path).
+_ACC_UPRIGHT = _acc_from_pitch_roll_rad(0.0, 0.0)
+
+
+async def _stream_loop(
+    websocket: Any,
+    interval: float,
+    include_com: bool,
+    *,
+    still_seconds: float,
+    cycle_seconds: float,
+    lean_deg: float,
+    client: str,
+) -> None:
+    """Send ``mot`` frames whose ACC traces a smooth lean cycle in pitch/roll.
+
+    For ``still_seconds`` after streaming starts, ACC stays upright (no tilt) so you
+    can connect and calibrate. Then phase advances so combined tilt stays at fixed
+    magnitude ``lean_deg`` (leaning "outward" around the compass): **forward** →
+    **right** → **backward** → **left** → forward again.
+    """
+    _log_event(
+        client,
+        f"stream tick started (interval {interval}s, com={'on' if include_com else 'off'})",
+    )
+    if still_seconds > 0:
+        _log_event(client, f"upright / calibration: no lean for {still_seconds}s, then lean cycle")
     t = 0.0
+    two_pi = 2.0 * math.pi
+    last_progress_log = 0.0
+    progress_log_every = 2.0
     while True:
         await asyncio.sleep(interval)
         t += interval
-        pitch_rad = math.radians(12.0 * math.sin(t * 1.5))
-        roll_rad = math.radians(8.0 * math.cos(t * 1.1))
-        # Synthetic ACC matching ``accel_to_pitch_roll`` in ``core`` so manual testing moves with tilt.
-        az = 1.0
-        ay = math.tan(roll_rad) * az
-        h = math.hypot(ay, az)
-        ax = -math.tan(pitch_rad) * h
+        if t <= still_seconds:
+            ax, ay, az = _ACC_UPRIGHT
+        else:
+            if still_seconds > 0 and t - interval <= still_seconds:
+                _log_event(client, "still phase ended; lean cycle running")
+            t_rel = t - still_seconds
+            phase = (t_rel / max(cycle_seconds, 0.5)) * two_pi
+            # Circle in pitch-roll (degrees): forward at phase 0, then CCW to right, back, left.
+            pitch_deg = -lean_deg * math.cos(phase)
+            roll_deg = lean_deg * math.sin(phase)
+            pitch_rad = math.radians(pitch_deg)
+            roll_rad = math.radians(roll_deg)
+            ax, ay, az = _acc_from_pitch_roll_rad(pitch_rad, roll_rad)
+            if t - last_progress_log >= progress_log_every:
+                last_progress_log = t
+                _log_event(
+                    client,
+                    f"lean tick t={t:.1f}s pitch={pitch_deg:.1f}° roll={roll_deg:.1f}° "
+                    f"ACC=({ax:.4f},{ay:.4f},{az:.4f})",
+                )
         mot = [
             0,
             0,
@@ -110,34 +175,60 @@ async def _stream_loop(websocket: Any, interval: float, include_com: bool) -> No
                 payload["com"] = ["neutral", 0.0]
         try:
             await websocket.send(json.dumps(payload))
-        except Exception:
+        except Exception as exc:
+            _log_event(client, f"stream send stopped: {exc!r}")
             break
 
 
-async def _connection_handler(websocket: Any, interval: float, include_com: bool) -> None:
+async def _connection_handler(
+    websocket: Any,
+    interval: float,
+    include_com: bool,
+    *,
+    still_seconds: float,
+    cycle_seconds: float,
+    lean_deg: float,
+) -> None:
+    client = _client_addr(websocket)
     stream_task: asyncio.Task | None = None
+    _log_event(client, "client connected")
     try:
         async for raw in websocket:
             try:
                 msg = json.loads(raw)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                _log_event(client, f"ignored non-JSON message ({exc!r}): {raw[:200]!r}")
                 continue
             if msg.get("jsonrpc") != "2.0" or "method" not in msg:
+                _log_event(client, f"ignored non-RPC message: {msg!r}")
                 continue
             req_id = msg.get("id")
             if req_id is None:
+                _log_event(client, f"ignored notification (no id): {msg!r}")
                 continue
             method = msg["method"]
             params = msg.get("params") or {}
             if not isinstance(params, dict):
                 params = {}
+            _log_event(client, f"RPC in id={req_id} method={method} params={params!r}")
             result = _handle_method(method, params)
             await websocket.send(json.dumps(_rpc_result(req_id, result)))
+            _log_event(client, f"RPC out id={req_id} method={method} ok")
             if method == "subscribe" and stream_task is None:
+                _log_event(client, "subscribe accepted; starting mot stream task")
                 stream_task = asyncio.create_task(
-                    _stream_loop(websocket, interval, include_com)
+                    _stream_loop(
+                        websocket,
+                        interval,
+                        include_com,
+                        still_seconds=still_seconds,
+                        cycle_seconds=cycle_seconds,
+                        lean_deg=lean_deg,
+                        client=client,
+                    )
                 )
     finally:
+        _log_event(client, "client disconnected")
         if stream_task is not None:
             stream_task.cancel()
             try:
@@ -146,14 +237,39 @@ async def _connection_handler(websocket: Any, interval: float, include_com: bool
                 pass
 
 
-async def _run_server(host: str, port: int, interval: float, include_com: bool) -> None:
-    async with websockets.serve(
-        lambda ws: _connection_handler(ws, interval, include_com),
-        host,
-        port,
-    ):
+async def _run_server(
+    host: str,
+    port: int,
+    interval: float,
+    include_com: bool,
+    *,
+    still_seconds: float,
+    cycle_seconds: float,
+    lean_deg: float,
+) -> None:
+    async def _handler(ws: Any) -> None:
+        await _connection_handler(
+            ws,
+            interval,
+            include_com,
+            still_seconds=still_seconds,
+            cycle_seconds=cycle_seconds,
+            lean_deg=lean_deg,
+        )
+
+    async with websockets.serve(_handler, host, port):
         print(f"Fake Cortex listening on ws://{host}:{port}", flush=True)
         print(f"Stream interval {interval}s; com={'on' if include_com else 'off'}", flush=True)
+        if still_seconds > 0:
+            print(
+                f"Still (no lean) for {still_seconds}s after subscribe, then lean cycle starts.",
+                flush=True,
+            )
+        print(
+            f"Lean cycle {cycle_seconds}s, radius {lean_deg}° pitch/roll "
+            "(forward→right→back→left→forward, constant outward lean)",
+            flush=True,
+        )
         await asyncio.get_running_loop().create_future()
 
 
@@ -172,12 +288,49 @@ def main() -> None:
         action="store_true",
         help="Include synthetic mental-command frames (com) alongside mot",
     )
+    p.add_argument(
+        "--cycle-seconds",
+        type=float,
+        default=16.0,
+        help="Seconds for one full forward→right→back→left→forward lean loop (default 16)",
+    )
+    p.add_argument(
+        "--lean-deg",
+        type=float,
+        default=14.0,
+        help="Tilt magnitude in degrees (default 14, above typical 10° threshold)",
+    )
+    p.add_argument(
+        "--still-seconds",
+        type=float,
+        default=5.0,
+        help="Upright / no lean before the loop starts (default 5; use 0 to skip)",
+    )
     args = p.parse_args()
     if args.interval <= 0:
         print("interval must be positive", file=sys.stderr)
         sys.exit(2)
+    if args.cycle_seconds <= 0:
+        print("--cycle-seconds must be positive", file=sys.stderr)
+        sys.exit(2)
+    if args.lean_deg <= 0:
+        print("--lean-deg must be positive", file=sys.stderr)
+        sys.exit(2)
+    if args.still_seconds < 0:
+        print("--still-seconds must be >= 0", file=sys.stderr)
+        sys.exit(2)
     try:
-        asyncio.run(_run_server(args.host, args.port, args.interval, args.com))
+        asyncio.run(
+            _run_server(
+                args.host,
+                args.port,
+                args.interval,
+                args.com,
+                still_seconds=args.still_seconds,
+                cycle_seconds=args.cycle_seconds,
+                lean_deg=args.lean_deg,
+            )
+        )
     except KeyboardInterrupt:
         print("Stopped.", flush=True)
 
