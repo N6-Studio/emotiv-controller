@@ -49,6 +49,18 @@ _CROSS = "#6b7280"
 _DOT = "#14b8a6"
 
 
+def _action_btn_style(*, gap_after: bool = False) -> Pack:
+    """Larger primary actions; use gap_after on buttons that have another button to their right."""
+    return Pack(
+        font_size=14,
+        font_weight="bold",
+        padding_top=12,
+        padding_bottom=12,
+        padding_left=16,
+        padding_right=10 if gap_after else 18,
+    )
+
+
 def _icon() -> Optional[toga.Icon]:
     if getattr(sys, "frozen", False):
         mei = getattr(sys, "_MEIPASS", None)
@@ -401,7 +413,7 @@ class EmotivBridgeApp(toga.App):
         err_box = toga.Box(style=Pack(direction=COLUMN, padding_bottom=8))
         ph.add(err_box)
 
-        self.error_label = toga.Label("", style=Pack(color="#b91c1c", flex=1))
+        self.error_label = toga.Label("", style=Pack(color="#b91c1c"))
         err_box.add(self.error_label)
 
         self.retry_button = toga.Button(
@@ -435,7 +447,7 @@ class EmotivBridgeApp(toga.App):
         body = toga.Box(style=Pack(direction=COLUMN, flex=1))
         ph.add(body)
 
-        pad_row = toga.Box(style=Pack(direction=ROW, flex=1, alignment=TOP))
+        pad_row = toga.Box(style=Pack(direction=ROW, alignment=TOP))
         body.add(pad_row)
 
         pad_host = toga.Box(style=Pack(padding=8))
@@ -462,6 +474,8 @@ class EmotivBridgeApp(toga.App):
 
         self.com_threshold_hint = toga.Label("", style=Pack(font_size=10, color="#9ca3af", padding_top=4))
         com_box.add(self.com_threshold_hint)
+
+        body.add(toga.Box(style=Pack(flex=1)))
 
         self.keyboard_label = toga.Label("", style=Pack(color="#6b7280", font_size=11, padding=8))
         body.add(self.keyboard_label)
@@ -502,7 +516,16 @@ class EmotivBridgeApp(toga.App):
         )
         ph.add(self.calibration_xy_label)
 
-        ph.add(toga.Button("Cancel", on_press=lambda w: self.show_main_view()))
+        cancel_row = toga.Box(style=Pack(direction=ROW, padding_top=8, padding_bottom=12))
+        ph.add(cancel_row)
+        cancel_row.add(toga.Box(style=Pack(flex=1)))
+        cancel_row.add(
+            toga.Button(
+                "Cancel",
+                on_press=lambda w: self.show_main_view(),
+                style=_action_btn_style(),
+            )
+        )
 
     def show_calibration_review_view(self) -> None:
         self.current_view = "calibration_review"
@@ -522,11 +545,24 @@ class EmotivBridgeApp(toga.App):
 
         self.create_movement_pad(ph)
 
-        row = toga.Box(style=Pack(direction=ROW, padding_top=16))
+        row = toga.Box(style=Pack(direction=ROW, padding_top=16, padding_left=12, padding_right=12))
         ph.add(row)
-        row.add(toga.Button("Cancel", on_press=lambda w: self.show_main_view(), style=Pack(padding_right=8)))
-        row.add(toga.Button("Save", on_press=lambda w: self.save_calibration(), style=Pack(padding_right=8)))
-        row.add(toga.Button("Retry", on_press=lambda w: self.show_calibration_view()))
+        row.add(toga.Box(style=Pack(flex=1)))
+        row.add(
+            toga.Button(
+                "Cancel",
+                on_press=lambda w: self.show_main_view(),
+                style=_action_btn_style(gap_after=True),
+            )
+        )
+        row.add(
+            toga.Button(
+                "Retry",
+                on_press=lambda w: self.show_calibration_view(),
+                style=_action_btn_style(gap_after=True),
+            )
+        )
+        row.add(toga.Button("Save", on_press=lambda w: self.save_calibration(), style=_action_btn_style()))
 
     def save_calibration(self, widget: Optional[toga.Widget] = None) -> None:
         self.config_data.neutral_x = self.pending_neutral_x
@@ -669,10 +705,17 @@ class EmotivBridgeApp(toga.App):
         ver_box.add(toga.Label(f"Version {get_app_version()}", style=Pack(color="#6b7280", font_size=10)))
         ver_box.add(toga.Button("Check for updates", on_press=self._on_check_for_updates))
 
-        br = toga.Box(style=Pack(direction=ROW, padding_top=20, padding_bottom=12))
+        br = toga.Box(style=Pack(direction=ROW, padding_top=20, padding_bottom=12, padding_left=12, padding_right=12))
         ph.add(br)
-        br.add(toga.Button("Back", on_press=lambda w: self.show_main_view(), style=Pack(padding_right=8)))
-        br.add(toga.Button("Save", on_press=save_settings))
+        br.add(toga.Box(style=Pack(flex=1)))
+        br.add(
+            toga.Button(
+                "Back",
+                on_press=lambda w: self.show_main_view(),
+                style=_action_btn_style(gap_after=True),
+            )
+        )
+        br.add(toga.Button("Save", on_press=save_settings, style=_action_btn_style()))
 
     def show_env_settings_view(self, widget: Optional[toga.Widget] = None) -> None:
         self.current_view = "env_settings"
@@ -719,10 +762,17 @@ class EmotivBridgeApp(toga.App):
             )
             self.show_settings_view()
 
-        br = toga.Box(style=Pack(direction=ROW, padding_top=16))
+        br = toga.Box(style=Pack(direction=ROW, padding_top=16, padding_left=12, padding_right=12, padding_bottom=12))
         ph.add(br)
-        br.add(toga.Button("Back", on_press=lambda w: self.show_settings_view(), style=Pack(padding_right=8)))
-        br.add(toga.Button("Save", on_press=save_env))
+        br.add(toga.Box(style=Pack(flex=1)))
+        br.add(
+            toga.Button(
+                "Back",
+                on_press=lambda w: self.show_settings_view(),
+                style=_action_btn_style(gap_after=True),
+            )
+        )
+        br.add(toga.Button("Save", on_press=save_env, style=_action_btn_style()))
 
     def process_stream_message(self, msg: dict) -> None:
         has_input = False
