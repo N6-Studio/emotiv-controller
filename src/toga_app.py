@@ -44,6 +44,7 @@ from bridge_core import (
     write_app_env_file,
 )
 from core import compute_motion_movements
+from update_service import semver_less
 
 _CROSS = "#6b7280"
 _DOT = "#14b8a6"
@@ -1052,12 +1053,23 @@ class EmotivBridgeApp(toga.App):
             self.main_window.error_dialog("Check for updates", f"Update check failed:\n{err}")
             return
         if not is_newer:
-            ch = manifest.get("version", "?")
-            self.main_window.info_dialog(
-                "Check for updates",
-                f"You are up to date.\n\nInstalled: {get_app_version()}\n"
-                f"Update channel: {ch}",
-            )
+            installed = get_app_version()
+            published = manifest.get("version", "?")
+            lines = [
+                "You are up to date.",
+                "",
+                f"Installed: {installed}",
+                f"Published in update feed: {published}",
+            ]
+            if published != "?" and semver_less(published, installed):
+                lines.extend(
+                    [
+                        "",
+                        "Your build is newer than the version listed in the update feed. "
+                        "The manifest may not have been updated for this release yet.",
+                    ]
+                )
+            self.main_window.info_dialog("Check for updates", "\n".join(lines))
             return
         latest = manifest["version"]
 
