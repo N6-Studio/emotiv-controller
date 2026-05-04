@@ -113,18 +113,42 @@ class CortexEnv:
     debit: int
 
 
+def _env_nonempty(key: str) -> Optional[str]:
+    """Return stripped value or None if unset or blank (dotenv often sets KEY= as empty string)."""
+    raw = os.getenv(key)
+    if raw is None:
+        return None
+    s = raw.strip()
+    return s if s else None
+
+
+def _env_str_default(key: str, default: str) -> str:
+    v = _env_nonempty(key)
+    return v if v is not None else default
+
+
+def _parse_emotiv_debit() -> int:
+    raw = os.getenv("EMOTIV_DEBIT")
+    if raw is None or not raw.strip():
+        return 1
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return 1
+
+
 def read_cortex_env() -> CortexEnv:
     return CortexEnv(
-        cortex_url=os.getenv("CORTEX_URL", "wss://localhost:6868"),
+        cortex_url=_env_str_default("CORTEX_URL", "wss://localhost:6868"),
         streams=[
             s.strip()
-            for s in os.getenv("STREAMS", "mot").split(",")
+            for s in _env_str_default("STREAMS", "mot").split(",")
             if s.strip()
         ],
-        client_id=os.getenv("EMOTIV_CLIENT_ID"),
-        client_secret=os.getenv("EMOTIV_CLIENT_SECRET"),
-        license=os.getenv("EMOTIV_LICENSE", ""),
-        debit=int(os.getenv("EMOTIV_DEBIT", "1")),
+        client_id=_env_nonempty("EMOTIV_CLIENT_ID"),
+        client_secret=_env_nonempty("EMOTIV_CLIENT_SECRET"),
+        license=_env_str_default("EMOTIV_LICENSE", ""),
+        debit=_parse_emotiv_debit(),
     )
 
 

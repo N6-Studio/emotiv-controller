@@ -113,3 +113,31 @@ def test_read_cortex_env_reflects_os(monkeypatch):
     assert ce.client_secret == "b"
     assert ce.license == "lic"
     assert ce.debit == 2
+
+
+def test_read_cortex_env_blank_strings_use_defaults(monkeypatch):
+    """Blank values from app.env / .env must not hide code defaults in the UI."""
+    import app as app_module
+
+    for k in (
+        "CORTEX_URL",
+        "STREAMS",
+        "EMOTIV_CLIENT_ID",
+        "EMOTIV_CLIENT_SECRET",
+        "EMOTIV_LICENSE",
+        "EMOTIV_DEBIT",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("CORTEX_URL", "")
+    monkeypatch.setenv("STREAMS", "  ")
+    monkeypatch.setenv("EMOTIV_CLIENT_ID", "")
+    monkeypatch.setenv("EMOTIV_CLIENT_SECRET", "")
+    monkeypatch.setenv("EMOTIV_LICENSE", "")
+    monkeypatch.setenv("EMOTIV_DEBIT", "")
+    ce = app_module.read_cortex_env()
+    assert ce.cortex_url == "wss://localhost:6868"
+    assert ce.streams == ["mot"]
+    assert ce.client_id is None
+    assert ce.client_secret is None
+    assert ce.license == ""
+    assert ce.debit == 1
