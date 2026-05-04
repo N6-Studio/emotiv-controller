@@ -3,9 +3,9 @@ Minimal fake EMOTIV Cortex WebSocket for manual testing of the Movement Bridge.
 
 Emits the same JSON-RPC responses as Cortex for requestAccess → subscribe, then
 pushes synthetic ``mot`` (and optionally ``com``) stream frames. For a few seconds
-after streaming starts, ACC is upright (no lean) for calibration, then ``mot`` ACC
-follows a smooth circle in pitch/roll so lean cycles **forward → right → backward →
-left** with constant outward tilt magnitude.
+after streaming starts, the headset is upright (no lean) for calibration, then the
+quaternion ``Q0..Q3`` follows a smooth circle in pitch/roll so lean cycles
+**forward → right → backward → left** with constant outward tilt magnitude.
 
 Setup::
 
@@ -90,17 +90,25 @@ def _handle_method(method: str, _params: dict) -> dict:
     return {}
 
 
-def _acc_from_pitch_roll_rad(pitch_rad: float, roll_rad: float) -> tuple[float, float, float]:
-    """Build ACC consistent with ``core.accel_to_pitch_roll`` inverse (az=1 baseline)."""
-    az = 1.0
-    ay = math.tan(roll_rad) * az
-    h = math.hypot(ay, az)
-    ax = -math.tan(pitch_rad) * h
-    return ax, ay, az
+def _quat_from_pitch_roll_rad(pitch_rad: float, roll_rad: float) -> tuple[float, float, float, float]:
+    """Hamilton ``(w, x, y, z) = q_pitch * q_roll`` matching ``core.quaternion_to_pitch_roll``.
+
+    Pitch rotates about Y; roll rotates about X. Composing this way makes the
+    decomposition recover the input pitch/roll exactly when |pitch| < 90°.
+    """
+    cp = math.cos(pitch_rad / 2.0)
+    sp = math.sin(pitch_rad / 2.0)
+    cr = math.cos(roll_rad / 2.0)
+    sr = math.sin(roll_rad / 2.0)
+    w = cp * cr
+    x = cp * sr
+    y = sp * cr
+    z = -sp * sr
+    return w, x, y, z
 
 
-# Upright / no lean → ~0° pitch and roll in ``mot_to_tilt_xy`` (ACC path).
-_ACC_UPRIGHT = _acc_from_pitch_roll_rad(0.0, 0.0)
+# Upright / no lean → identity quaternion → ~0° pitch and roll.
+_QUAT_UPRIGHT = _quat_from_pitch_roll_rad(0.0, 0.0)
 
 
 async def _stream_loop(
@@ -113,12 +121,12 @@ async def _stream_loop(
     lean_deg: float,
     client: str,
 ) -> None:
-    """Send ``mot`` frames whose ACC traces a smooth lean cycle in pitch/roll.
+    """Send ``mot`` frames whose quaternion traces a smooth lean cycle in pitch/roll.
 
-    For ``still_seconds`` after streaming starts, ACC stays upright (no tilt) so you
-    can connect and calibrate. Then phase advances so combined tilt stays at fixed
-    magnitude ``lean_deg`` (leaning "outward" around the compass): **forward** →
-    **right** → **backward** → **left** → forward again.
+    For ``still_seconds`` after streaming starts, the quaternion stays at identity
+    (no tilt) so you can connect and calibrate. Then phase advances so combined
+    tilt stays at fixed magnitude ``lean_deg`` (leaning "outward" around the
+    compass): **forward** → **right** → **backward** → **left** → forward again.
     """
     _log_event(
         client,
@@ -134,7 +142,9 @@ async def _stream_loop(
         await asyncio.sleep(interval)
         t += interval
         if t <= still_seconds:
-            ax, ay, az = _ACC_UPRIGHT
+            q0, q1, q2, q3 = _QUAT_UPRIGHT
+            pitch_deg = 0.0
+            roll_deg = 0.0
         else:
             if still_seconds > 0 and t - interval <= still_seconds:
                 _log_event(client, "still phase ended; lean cycle running")
@@ -145,24 +155,24 @@ async def _stream_loop(
             roll_deg = lean_deg * math.sin(phase)
             pitch_rad = math.radians(pitch_deg)
             roll_rad = math.radians(roll_deg)
-            ax, ay, az = _acc_from_pitch_roll_rad(pitch_rad, roll_rad)
+            q0, q1, q2, q3 = _quat_from_pitch_roll_rad(pitch_rad, roll_rad)
             if t - last_progress_log >= progress_log_every:
                 last_progress_log = t
                 _log_event(
                     client,
                     f"lean tick t={t:.1f}s pitch={pitch_deg:.1f}° roll={roll_deg:.1f}° "
-                    f"ACC=({ax:.4f},{ay:.4f},{az:.4f})",
+                    f"Q=({q0:.4f},{q1:.4f},{q2:.4f},{q3:.4f})",
                 )
         mot = [
             0,
             0,
+            round(q0, 6),
+            round(q1, 6),
+            round(q2, 6),
+            round(q3, 6),
+            0.0,
+            0.0,
             1.0,
-            0.0,
-            0.0,
-            0.0,
-            round(ax, 6),
-            round(ay, 6),
-            round(az, 6),
             -44.656766,
             -86.970985,
             23.221568,

@@ -69,12 +69,32 @@ def test_sync_motion_and_com(keyboard_controller):
     kb = SimulatedKeyboard()
     cfg = AppConfig()
     cfg.keyboard_enabled = True
+    cfg.keyboard_com_enabled = True
     cfg.key_bindings["forward"] = "w"
     cfg.com_key_bindings["push"] = "p"
 
     kb.sync({"forward"}, {"push"}, cfg)
     keys_pressed = {c.args[0] for c in keyboard_controller.press.call_args_list}
     assert keys_pressed == {"w", "p"}
+
+    kb.sync(set(), set(), cfg)
+    assert kb.pressed_movements == set()
+    assert kb.pressed_com_actions == set()
+
+
+def test_sync_com_keys_suppressed_when_keyboard_com_disabled(keyboard_controller):
+    from app import AppConfig, SimulatedKeyboard
+
+    kb = SimulatedKeyboard()
+    cfg = AppConfig()
+    cfg.keyboard_enabled = True
+    cfg.keyboard_com_enabled = False
+    cfg.key_bindings["forward"] = "w"
+    cfg.com_key_bindings["push"] = "p"
+
+    kb.sync({"forward"}, {"push"}, cfg)
+    keys_pressed = {c.args[0] for c in keyboard_controller.press.call_args_list}
+    assert keys_pressed == {"w"}
 
     kb.sync(set(), set(), cfg)
     assert kb.pressed_movements == set()

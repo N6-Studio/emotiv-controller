@@ -19,6 +19,47 @@ def test_appconfig_debug_mode_default():
     assert AppConfig().debug_mode is False
 
 
+def test_appconfig_invert_axes_default_off():
+    from app import AppConfig
+
+    cfg = AppConfig()
+    assert cfg.invert_pitch is False
+    assert cfg.invert_roll is False
+
+
+def test_load_save_invert_axes_round_trip(monkeypatch, tmp_path):
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    original = app_module.AppConfig(invert_pitch=True, invert_roll=True)
+    app_module.save_config(original)
+    loaded = app_module.load_config()
+    assert loaded.invert_pitch is True
+    assert loaded.invert_roll is True
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["invert_pitch"] is True
+    assert raw["invert_roll"] is True
+
+
+def test_minimal_config_without_invert_keys_gets_them_on_save(monkeypatch, tmp_path):
+    """Older config files omitting invert_* still round-trip with keys after save."""
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"threshold": 7.0}), encoding="utf-8")
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    cfg = app_module.load_config()
+    assert cfg.invert_pitch is False
+    assert cfg.invert_roll is False
+    app_module.save_config(cfg)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert "invert_pitch" in raw
+    assert "invert_roll" in raw
+    assert raw["invert_pitch"] is False
+    assert raw["invert_roll"] is False
+
+
 def test_load_save_round_trip(monkeypatch, tmp_path):
     import app as app_module
 
@@ -145,33 +186,15 @@ def test_appconfig_partial_movement_thresholds_use_base():
     assert cfg.movement_thresholds["right"] == 10.0
 
 
-def test_appconfig_unknown_tilt_mode_coerced_to_euler():
-    from app import AppConfig
-
-    cfg = AppConfig(tilt_mode="not_a_mode")
-    assert cfg.tilt_mode == "euler"
-
-
-def test_load_save_tilt_mode_round_trip(monkeypatch, tmp_path):
-    import app as app_module
-
-    path = tmp_path / "config.json"
-    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
-    original = app_module.AppConfig(tilt_mode="horizontal_projection")
-    app_module.save_config(original)
-    loaded = app_module.load_config()
-    assert loaded.tilt_mode == "horizontal_projection"
-
-
-def test_sanitize_legacy_neutral_skipped_when_not_euler(monkeypatch, tmp_path):
+def test_load_config_drops_obsolete_tilt_mode_key(monkeypatch, tmp_path):
     import app as app_module
 
     path = tmp_path / "config.json"
     path.write_text(
         json.dumps(
             {
-                "neutral_x": 49.826,
-                "neutral_y": -1.12,
+                "neutral_x": 1.0,
+                "neutral_y": 2.0,
                 "tilt_mode": "horizontal_projection",
                 "threshold": 10.0,
             }
@@ -180,5 +203,6 @@ def test_sanitize_legacy_neutral_skipped_when_not_euler(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(app_module, "CONFIG_PATH", path)
     cfg = app_module.load_config()
-    assert cfg.neutral_x == pytest.approx(49.826)
-    assert cfg.neutral_y == pytest.approx(-1.12)
+    assert cfg.neutral_x == pytest.approx(1.0)
+    assert cfg.neutral_y == pytest.approx(2.0)
+    assert not hasattr(cfg, "tilt_mode")

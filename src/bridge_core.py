@@ -115,12 +115,14 @@ MOVEMENTS = {
 class AppConfig:
     neutral_x: Optional[float] = None
     neutral_y: Optional[float] = None
-    # "euler" = pitch/roll from ACC or quaternion; "horizontal_projection" = bubble-style ACC pair.
-    tilt_mode: str = "euler"
     threshold: float = DEFAULT_THRESHOLD
     threshold_global: bool = True
     movement_thresholds: dict = field(default_factory=dict)
     keyboard_enabled: bool = False
+    keyboard_com_enabled: bool = False
+    # Negate quaternion-derived pitch / roll before thresholds and calibration (default off).
+    invert_pitch: bool = False
+    invert_roll: bool = False
     debug_mode: bool = False
     com_power_threshold: float = DEFAULT_COM_POWER_THRESHOLD
     key_bindings: dict = None
@@ -133,8 +135,6 @@ class AppConfig:
     emotiv_debit: int = 1
 
     def __post_init__(self):
-        if self.tilt_mode not in ("euler", "horizontal_projection"):
-            self.tilt_mode = "euler"
         if self.key_bindings is None:
             self.key_bindings = {
                 movement: data["default_key"]
@@ -166,16 +166,6 @@ class AppConfig:
                 self.emotiv_debit = 1
 
 
-def _sanitize_legacy_neutral_for_degrees(cfg: AppConfig) -> None:
-    """Clear neutrals from pre-degree tilt calibration (magnetometer-scale ~50 on pitch)."""
-    if getattr(cfg, "tilt_mode", "euler") != "euler":
-        return
-    nx = cfg.neutral_x
-    if nx is not None and (nx > 35.0 or nx < -35.0):
-        cfg.neutral_x = None
-        cfg.neutral_y = None
-
-
 def load_config() -> AppConfig:
     path = _config_path()
     if not path.exists():
@@ -188,13 +178,23 @@ def load_config() -> AppConfig:
         allowed = {f.name for f in fields(AppConfig)}
         filtered = {k: v for k, v in raw.items() if k in allowed}
         cfg = AppConfig(**filtered)
-        _sanitize_legacy_neutral_for_degrees(cfg)
+        # Clear neutrals from pre-degree tilt calibration (magnetometer-scale ~50 on pitch).
+        nx = cfg.neutral_x
+        if nx is not None and (nx > 35.0 or nx < -35.0):
+            cfg.neutral_x = None
+            cfg.neutral_y = None
         return cfg
     except Exception:
         return AppConfig()
 
 
 def save_config(config: AppConfig):
+    """Write ``config`` to disk as JSON (full ``AppConfig`` snapshot via ``asdict``).
+
+    Every field on ``AppConfig`` is persisted, including ``invert_pitch`` and
+    ``invert_roll``, so any code path that calls this (settings, calibration,
+    keyboard shortcut toggle, env form) keeps those flags in ``config.json``.
+    """
     path = _config_path()
     path.write_text(
         json.dumps(asdict(config), indent=2),
@@ -326,11 +326,12 @@ class SimulatedKeyboard:
             else:
                 self.release(movement, key)
 
+        effective_com = com_actions if config.keyboard_com_enabled else set()
         for action in COM_MAPPED_MENTAL_ACTIONS:
             key = config.com_key_bindings.get(action)
             if not key:
                 continue
-            if action in com_actions:
+            if action in effective_com:
                 self.press_com(action, key)
             else:
                 self.release_com(action, key)
