@@ -43,7 +43,7 @@ from bridge_core import (
     mental_command_to_sets,
     save_config,
 )
-from core import compute_motion_movements, mot_to_tilt_xy
+from core import compute_motion_movements, mot_to_tilt_xy, resolved_movement_thresholds
 from update_service import semver_less
 
 # Live motion readout axis labels — quaternion pitch (forward/back) and roll (left/right).
@@ -53,6 +53,7 @@ _CROSS = "#6b7280"
 _DOT = "#14b8a6"
 _DOT_BORDER = "#64748b"
 _AIM_FRAME = "#52525b"
+_AIM_ACTIVATION_FILL = "rgba(13, 148, 136, 0.12)"
 _AIM_BOX_FRACTION = 0.46
 # Minimum side length (px) for the main-view crosshair canvas with flex=1 (intrinsic hint).
 _MAIN_CROSSHAIR_MIN = 280
@@ -1210,6 +1211,33 @@ class EmotivBridgeApp(toga.App):
 
         ctx = self.cross_canvas.context
         ctx.clear()
+
+        if neutral_x is not None and neutral_y is not None:
+            t_fwd, t_back, t_left, t_right = resolved_movement_thresholds(
+                threshold_global=bool(self.config_data.threshold_global),
+                threshold=float(self.config_data.threshold),
+                movement_thresholds=self.config_data.movement_thresholds,
+            )
+            left, top = cx - aim_half, cy - aim_half
+            right, bottom = cx + aim_half, cy + aim_half
+            with ctx.Fill(color=_AIM_ACTIVATION_FILL) as band:
+                y1 = cy - t_fwd * scale
+                h_top = y1 - top
+                if h_top > 0:
+                    band.rect(left, top, right - left, h_top)
+                y0 = cy + t_back * scale
+                h_bot = bottom - y0
+                if h_bot > 0:
+                    band.rect(left, y0, right - left, h_bot)
+                x1 = cx - t_left * scale
+                w_left = x1 - left
+                if w_left > 0:
+                    band.rect(left, top, w_left, bottom - top)
+                x0 = cx + t_right * scale
+                w_right = right - x0
+                if w_right > 0:
+                    band.rect(x0, top, w_right, bottom - top)
+
         with ctx.Stroke(color=_AIM_FRAME, line_width=1.0) as frame:
             frame.rect(cx - aim_half, cy - aim_half, side_len, side_len)
 

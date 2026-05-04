@@ -1,6 +1,6 @@
 import pytest
 
-from core import compute_motion_movements
+from core import compute_motion_movements, resolved_movement_thresholds
 
 
 def _thresholds(**kwargs):
@@ -90,6 +90,23 @@ def test_per_movement_thresholds():
         threshold=99.0,
         movement_thresholds=m,
     ) == {"right"}
+
+
+def test_resolved_movement_thresholds_global():
+    assert resolved_movement_thresholds(
+        threshold_global=True,
+        threshold=4.5,
+        movement_thresholds=_thresholds(forward=1.0),
+    ) == (4.5, 4.5, 4.5, 4.5)
+
+
+def test_resolved_movement_thresholds_per_direction():
+    m = _thresholds(forward=2.0, backward=10.0, left=3.0, right=4.0)
+    assert resolved_movement_thresholds(
+        threshold_global=False,
+        threshold=99.0,
+        movement_thresholds=m,
+    ) == (2.0, 10.0, 3.0, 4.0)
 
 
 def test_x_axis_mutually_exclusive_forward_or_backward():

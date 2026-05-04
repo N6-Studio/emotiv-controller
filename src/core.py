@@ -112,6 +112,28 @@ def mot_to_tilt_xy(
     return float(mot[-2] or 0), float(mot[-1] or 0)
 
 
+def resolved_movement_thresholds(
+    *,
+    threshold_global: bool,
+    threshold: float,
+    movement_thresholds: dict[str, float],
+) -> tuple[float, float, float, float]:
+    """Pitch/roll threshold degrees matching :func:`compute_motion_movements`.
+
+    Returns ``(t_fwd, t_back, t_left, t_right)`` for forward / backward / left / right.
+    """
+    if threshold_global:
+        t = float(threshold)
+        return (t, t, t, t)
+    m = movement_thresholds
+    return (
+        float(m["forward"]),
+        float(m["backward"]),
+        float(m["left"]),
+        float(m["right"]),
+    )
+
+
 def compute_motion_movements(
     x: float,
     y: float,
@@ -123,14 +145,11 @@ def compute_motion_movements(
     movement_thresholds: dict[str, float],
 ) -> set[str]:
     """Return abstract movement names active for the given pose vs neutral."""
-    if threshold_global:
-        t_fwd = t_back = t_left = t_right = float(threshold)
-    else:
-        m = movement_thresholds
-        t_fwd = float(m["forward"])
-        t_back = float(m["backward"])
-        t_left = float(m["left"])
-        t_right = float(m["right"])
+    t_fwd, t_back, t_left, t_right = resolved_movement_thresholds(
+        threshold_global=threshold_global,
+        threshold=threshold,
+        movement_thresholds=movement_thresholds,
+    )
 
     movements: set[str] = set()
 
