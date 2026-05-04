@@ -341,6 +341,8 @@ class CortexClient(threading.Thread):
         self.on_stream = on_stream
         self.on_status = on_status
         self.on_error = on_error
+        # Column labels for ``mot`` samples from the last ``subscribe`` response (Cortex ``cols``).
+        self.mot_cols: Optional[list[str]] = None
 
         self.ws_app = None
         self.ws = None
@@ -517,11 +519,23 @@ class CortexClient(threading.Thread):
             "status": "active",
         })
 
-        self.request_v2("subscribe", {
+        sub_result = self.request_v2("subscribe", {
             "cortexToken": cortex_token,
             "session": session["id"],
             "streams": env.streams,
         })
+
+        self.mot_cols = None
+        if isinstance(sub_result, dict):
+            for item in sub_result.get("success") or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("streamName") != "mot":
+                    continue
+                cols = item.get("cols")
+                if isinstance(cols, list):
+                    self.mot_cols = [str(c) for c in cols]
+                break
 
         self.on_status(f"Ready · Headset {headset['id']}")
 

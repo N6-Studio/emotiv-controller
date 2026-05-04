@@ -42,7 +42,7 @@ from bridge_core import (
     mental_command_to_sets,
     save_config,
 )
-from core import compute_motion_movements
+from core import compute_motion_movements, mot_to_tilt_xy
 from update_service import semver_less
 
 _CROSS = "#6b7280"
@@ -454,7 +454,9 @@ class EmotivBridgeApp(toga.App):
         top.add(info)
         self.status_label = toga.Label("Connecting...", style=Pack(color="#6b7280", font_size=11))
         info.add(self.status_label)
-        self.xy_label = toga.Label("x=0 · y=0", style=Pack(padding_top=6, font_size=12))
+        self.xy_label = toga.Label(
+            "pitch=0.00° · roll=0.00°", style=Pack(padding_top=6, font_size=12)
+        )
         info.add(self.xy_label)
 
         body = toga.Box(style=Pack(direction=COLUMN, flex=1))
@@ -525,7 +527,7 @@ class EmotivBridgeApp(toga.App):
         ph.add(self.timer_label)
 
         self.calibration_xy_label = toga.Label(
-            "avg x=0 · avg y=0",
+            "avg pitch=0.00° · avg roll=0.00°",
             style=Pack(color="#6b7280", padding_bottom=20),
         )
         ph.add(self.calibration_xy_label)
@@ -549,10 +551,12 @@ class EmotivBridgeApp(toga.App):
         ph = self.panel_host
 
         ph.add(toga.Label("Verify configuration", style=Pack(font_size=20, font_weight="bold", padding_top=16, padding_bottom=8)))
-        self.review_xy_label = toga.Label("x=0 · y=0", style=Pack(padding_bottom=6))
+        self.review_xy_label = toga.Label(
+            "pitch=0.00° · roll=0.00°", style=Pack(padding_bottom=6)
+        )
         ph.add(self.review_xy_label)
         self.review_neutral_label = toga.Label(
-            f"Neutral x={self.pending_neutral_x:.2f} · y={self.pending_neutral_y:.2f}",
+            f"Neutral pitch={self.pending_neutral_x:.2f}° · roll={self.pending_neutral_y:.2f}°",
             style=Pack(color="#6b7280", padding_bottom=10),
         )
         ph.add(self.review_neutral_label)
@@ -821,8 +825,8 @@ class EmotivBridgeApp(toga.App):
             has_input = True
             mot = msg["mot"]
             if len(mot) >= 2:
-                self.current_x = float(mot[-2] or 0)
-                self.current_y = float(mot[-1] or 0)
+                mot_cols = self.cortex.mot_cols if self.cortex is not None else None
+                self.current_x, self.current_y = mot_to_tilt_xy(mot, mot_cols)
                 motion_detected.update(self.map_motion(self.current_x, self.current_y))
 
         if isinstance(msg.get("com"), list):
@@ -918,7 +922,7 @@ class EmotivBridgeApp(toga.App):
     def update_ui(self) -> None:
         self.draw_crosshair()
 
-        xy_text = f"x={self.current_x:.2f} · y={self.current_y:.2f}"
+        xy_text = f"pitch={self.current_x:.2f}° · roll={self.current_y:.2f}°"
         if self.xy_label is not None:
             self.xy_label.text = xy_text
         if self.review_xy_label is not None:
@@ -961,7 +965,9 @@ class EmotivBridgeApp(toga.App):
             if self.calibration_samples and self.calibration_xy_label is not None:
                 avg_x = sum(x for x, _ in self.calibration_samples) / len(self.calibration_samples)
                 avg_y = sum(y for _, y in self.calibration_samples) / len(self.calibration_samples)
-                self.calibration_xy_label.text = f"avg x={avg_x:.2f} · avg y={avg_y:.2f}"
+                self.calibration_xy_label.text = (
+                    f"avg pitch={avg_x:.2f}° · avg roll={avg_y:.2f}°"
+                )
 
             if elapsed >= 10:
                 if not self.calibration_samples:

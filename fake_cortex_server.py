@@ -49,8 +49,43 @@ def _handle_method(method: str, _params: dict) -> dict:
     if method == "createSession":
         return {"id": "fake-session-1"}
     if method == "subscribe":
-        return {"failure": []}
+        return {
+            "failure": [],
+            "success": [
+                {
+                    "cols": [
+                        "COUNTER_MEMS",
+                        "INTERPOLATED_MEMS",
+                        "Q0",
+                        "Q1",
+                        "Q2",
+                        "Q3",
+                        "ACCX",
+                        "ACCY",
+                        "ACCZ",
+                        "MAGX",
+                        "MAGY",
+                        "MAGZ",
+                    ],
+                    "sid": "fake-session-mot",
+                    "streamName": "mot",
+                },
+            ],
+        }
     return {}
+
+
+def _quat_mul(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+) -> tuple[float, float, float, float]:
+    w0, x0, y0, z0 = a
+    w1, x1, y1, z1 = b
+    return (
+        w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
+        w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
+        w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
+        w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
+    )
 
 
 async def _stream_loop(websocket: Any, interval: float, include_com: bool) -> None:
@@ -59,9 +94,26 @@ async def _stream_loop(websocket: Any, interval: float, include_com: bool) -> No
     while True:
         await asyncio.sleep(interval)
         t += interval
-        x = 50.0 + 12.0 * math.sin(t * 1.5)
-        y = 0.0 + 8.0 * math.cos(t * 1.1)
-        payload: dict = {"mot": [0, 0, round(x, 4), round(y, 4)]}
+        pitch_rad = math.radians(12.0 * math.sin(t * 1.5))
+        roll_rad = math.radians(8.0 * math.cos(t * 1.1))
+        q_pitch = (math.cos(pitch_rad / 2), 0.0, math.sin(pitch_rad / 2), 0.0)
+        q_roll = (math.cos(roll_rad / 2), math.sin(roll_rad / 2), 0.0, 0.0)
+        w, x, y, z = _quat_mul(q_roll, q_pitch)
+        mot = [
+            0,
+            0,
+            round(w, 6),
+            round(x, 6),
+            round(y, 6),
+            round(z, 6),
+            0.948257,
+            -0.354986,
+            -0.083497,
+            -44.656766,
+            -86.970985,
+            23.221568,
+        ]
+        payload: dict = {"mot": mot}
         if include_com:
             if int(t / 2.0) % 3 == 0:
                 payload["com"] = ["push", 0.55]
