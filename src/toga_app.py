@@ -105,7 +105,8 @@ class EmotivBridgeApp(toga.App):
 
         self.current_x = 0.0
         self.current_y = 0.0
-        self.active_movements: set[str] = set()
+        # Pad highlights from mental commands (last ``com`` frame); head motion is recomputed each UI tick.
+        self.com_pad_movements: set[str] = set()
 
         self.calibration_active = False
         self.calibration_started_at: Optional[float] = None
@@ -376,6 +377,13 @@ class EmotivBridgeApp(toga.App):
             font_size=16,
         )
 
+    def _apply_movement_pad_style(self, btn: toga.Label, active: bool) -> None:
+        """Update pad appearance in place so the native backend reliably repaints."""
+        if active:
+            btn.style.update(background_color="#0d9488", color="#ffffff")
+        else:
+            btn.style.update(background_color="#e5e7eb", color="#6b7280")
+
     def create_movement_pad(self, parent: toga.Box) -> None:
         pad = toga.Box(style=Pack(direction=COLUMN))
         parent.add(pad)
@@ -409,6 +417,7 @@ class EmotivBridgeApp(toga.App):
         assert self.panel_host is not None
         ph = self.panel_host
         self.com_powers = {a: 0.0 for a in COM_MAPPED_MENTAL_ACTIONS}
+        self.com_pad_movements = set()
 
         err_box = toga.Box(style=Pack(direction=COLUMN, padding_bottom=8))
         ph.add(err_box)
@@ -499,6 +508,7 @@ class EmotivBridgeApp(toga.App):
         self.calibration_active = True
         self.calibration_started_at = time.time()
         self.calibration_samples = []
+        self.com_pad_movements = set()
 
         ph.add(toga.Label("Calibration", style=Pack(font_size=22, font_weight="bold", padding_top=20, padding_bottom=10)))
         self.calibration_instruction_label = toga.Label(
@@ -799,12 +809,11 @@ class EmotivBridgeApp(toga.App):
             cm, ca = self.map_mental_command(com)
             com_movements.update(cm)
             com_actions.update(ca)
+            self.com_pad_movements = set(com_movements)
 
         if not has_input:
             return
 
-        detected = motion_detected | com_movements
-        self.active_movements = detected
         self.sim_keyboard.sync(motion_detected, com_actions, self.config_data)
 
         if self.calibration_active:
@@ -907,8 +916,10 @@ class EmotivBridgeApp(toga.App):
                 lab.text = f"{p:.2f}"
                 lab.style.color = "#0f766e" if p >= thr else "#111827"
 
+        motion_pad = self.map_motion(self.current_x, self.current_y)
+        display_movements = motion_pad | self.com_pad_movements
         for movement, btn in self.movement_buttons.items():
-            btn.style = self._pad_style(active=movement in self.active_movements)
+            self._apply_movement_pad_style(btn, movement in display_movements)
 
         if self.calibration_active:
             if self.calibration_started_at is None:
