@@ -1,7 +1,6 @@
 {
-  "neutral_x": 0.0,
-  "neutral_y": 0.0,
-  "tilt_mode": "euler",
+  "neutral_x": -0.5393267674760915,
+  "neutral_y": -21.454630297819108,
   "threshold": 10.0,
   "threshold_global": true,
   "movement_thresholds": {
@@ -11,6 +10,9 @@
     "right": 10.0
   },
   "keyboard_enabled": false,
+  "keyboard_com_enabled": false,
+  "invert_pitch": false,
+  "invert_roll": false,
   "debug_mode": false,
   "com_power_threshold": 0.25,
   "key_bindings": {
