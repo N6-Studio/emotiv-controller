@@ -586,10 +586,26 @@ class EmotivBridgeApp(toga.App):
         assert self.panel_host is not None
         ph = self.panel_host
 
-        ph.add(toga.Label("Settings", style=Pack(font_size=22, font_weight="bold", padding_top=16, padding_bottom=12)))
+        screen = toga.Box(
+            style=Pack(
+                direction=COLUMN,
+                flex=1,
+                padding_top=16,
+                padding_bottom=16,
+                padding_left=16,
+                padding_right=16,
+            ),
+        )
 
-        form = toga.Box(style=Pack(direction=COLUMN, padding_left=12, padding_right=12))
-        ph.add(form)
+        screen.add(
+            toga.Label(
+                "Settings",
+                style=Pack(font_size=22, font_weight="bold", padding_bottom=12),
+            )
+        )
+
+        form = toga.Box(style=Pack(direction=COLUMN))
+        screen.add(form)
 
         kb_sw = toga.Switch(
             "Enable simulated keyboard",
@@ -708,15 +724,21 @@ class EmotivBridgeApp(toga.App):
             save_config(self.config_data)
             self.show_main_view()
 
-        ph.add(toga.Button("Environment variables…", on_press=lambda w: self.show_env_settings_view(), style=Pack(padding_top=14)))
+        screen.add(
+            toga.Button(
+                "Environment variables…",
+                on_press=lambda w: self.show_env_settings_view(),
+                style=Pack(padding_top=14),
+            )
+        )
 
         ver_box = toga.Box(style=Pack(direction=COLUMN, padding_top=10))
-        ph.add(ver_box)
+        screen.add(ver_box)
         ver_box.add(toga.Label(f"Version {get_app_version()}", style=Pack(color="#6b7280", font_size=10)))
         ver_box.add(toga.Button("Check for updates", on_press=self._on_check_for_updates))
 
-        br = toga.Box(style=Pack(direction=ROW, padding_top=20, padding_bottom=12, padding_left=12, padding_right=12))
-        ph.add(br)
+        br = toga.Box(style=Pack(direction=ROW, padding_top=20, padding_bottom=12))
+        screen.add(br)
         br.add(toga.Box(style=Pack(flex=1)))
         br.add(
             toga.Button(
@@ -726,6 +748,8 @@ class EmotivBridgeApp(toga.App):
             )
         )
         br.add(toga.Button("Save", on_press=save_settings, style=_action_btn_style()))
+
+        ph.add(screen)
 
     def show_env_settings_view(self, widget: Optional[toga.Widget] = None) -> None:
         self.current_view = "env_settings"
