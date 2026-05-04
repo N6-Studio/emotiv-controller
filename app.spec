@@ -4,11 +4,13 @@ import os
 # Set by scripts/build.sh (--debug): '1' = console for debugging; default = windowed (no console).
 _emotiv_console = os.environ.get("EMOTIV_PYI_DEBUG", "0").strip().lower() in ("1", "true", "yes")
 
+_spec_dir = os.path.abspath(os.path.dirname(SPEC))
+
 a = Analysis(
-    ['app.py'],
-    pathex=[],
+    [os.path.join(_spec_dir, "src", "app.py")],
+    pathex=[os.path.join(_spec_dir, "src"), _spec_dir],
     binaries=[],
-    datas=[],
+    datas=[(os.path.join(_spec_dir, "assets", "app.ico"), "assets")],
     hiddenimports=[
         'bridge_core',
         'toga_app',
@@ -43,5 +45,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['app.ico'],
+    icon=[os.path.join(_spec_dir, "assets", "app.ico")],
 )

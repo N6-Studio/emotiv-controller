@@ -25,7 +25,13 @@ def _resolve_debug_log_path() -> Path:
         candidates.append(
             Path(sys.executable).resolve().parent / UPDATE_DEBUG_LOG_FILENAME
         )
-    candidates.append(Path(__file__).resolve().parent / UPDATE_DEBUG_LOG_FILENAME)
+    else:
+        # Local dev: project `python/` root (parent of `src/`) + logs/
+        candidates.append(
+            Path(__file__).resolve().parent.parent
+            / "logs"
+            / UPDATE_DEBUG_LOG_FILENAME
+        )
     candidates.append(Path(tempfile.gettempdir()) / UPDATE_DEBUG_LOG_FILENAME)
     for p in candidates:
         try:

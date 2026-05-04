@@ -50,7 +50,14 @@ _DOT = "#14b8a6"
 
 
 def _icon() -> Optional[toga.Icon]:
-    p = Path(__file__).resolve().parent / "app.ico"
+    if getattr(sys, "frozen", False):
+        mei = getattr(sys, "_MEIPASS", None)
+        if mei:
+            p = Path(mei) / "assets" / "app.ico"
+        else:
+            p = Path(sys.executable).resolve().parent / "assets" / "app.ico"
+    else:
+        p = Path(__file__).resolve().parent.parent / "assets" / "app.ico"
     if p.is_file():
         try:
             return toga.Icon(str(p))

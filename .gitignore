@@ -4,3 +4,4 @@ __pycache__
 _release_info.py
 app.env
 EmotivController.log
+logs/

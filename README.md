@@ -34,10 +34,10 @@ You need **Python 3** (3.10 through 3.13 recommended on Windows for the Toga Win
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python app.py
+python run.py
 ```
 
-The window is built with **BeeWare Toga** (native controls on Windows). Always start the app from the same folder as `app.py` so it finds your settings files.
+The window is built with **BeeWare Toga** (native controls on Windows). Always run commands from this `python` folder so it finds `config.json`, `app.env`, and related files (`run.py` adds `src` to the import path).
 
 ---
 
@@ -59,7 +59,7 @@ The window is built with **BeeWare Toga** (native controls on Windows). Always s
 | No movement | Calibrate again; lower the sensitivity threshold a little. |
 | Mental commands do nothing | They must be trained in Cortex and enabled in your stream/settings; if you only care about head motion, you can ignore mental commands. |
 | Keys do not reach the game | Turn on keyboard simulation; on some PCs, security software may ask for permission to “control” the keyboard — allow it if you trust this app. |
-| Odd behavior | Start the app from the folder that contains `app.py` and your config files so nothing is “lost.” |
+| Odd behavior | Start the app from this `python` folder (same place as `run.py` and your config files) so nothing is “lost.” |
 
 ---
 
