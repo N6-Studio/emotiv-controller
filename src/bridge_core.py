@@ -24,8 +24,29 @@ from update_service import (
     get_update_manifest_url,
 )
 
+APP_ENV_PATH = Path("app.env")
 
-load_dotenv()
+
+def _bundled_dotenv_path() -> Optional[Path]:
+    """PyInstaller onefile: project ``.env`` copied to the bundle root (see app.spec)."""
+    if not getattr(sys, "frozen", False):
+        return None
+    mei = getattr(sys, "_MEIPASS", None)
+    if not mei:
+        return None
+    p = Path(mei) / ".env"
+    return p if p.is_file() else None
+
+
+def _apply_startup_dotenv() -> None:
+    load_dotenv()
+    bundled = _bundled_dotenv_path()
+    if bundled is not None:
+        load_dotenv(bundled, override=False)
+    load_dotenv(APP_ENV_PATH, override=True)
+
+
+_apply_startup_dotenv()
 
 
 def _default_pynput_keyboard():
@@ -46,9 +67,6 @@ def _pynput_keyboard():
             return fn()
     return _default_pynput_keyboard()
 
-
-APP_ENV_PATH = Path("app.env")
-load_dotenv(APP_ENV_PATH, override=True)
 
 CONFIG_PATH = Path("config.json")
 

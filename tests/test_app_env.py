@@ -1,8 +1,6 @@
 import os
+import sys
 from pathlib import Path
-
-import pytest
-
 
 def test_write_read_app_env_round_trip(tmp_path):
     import app as app_module
@@ -68,6 +66,35 @@ def test_reload_app_env_into_os(tmp_path, monkeypatch):
             os.environ.pop("CORTEX_URL", None)
         else:
             os.environ["CORTEX_URL"] = prev
+
+
+def test_bundled_dotenv_path_none_when_not_frozen(monkeypatch):
+    import bridge_core as bc
+
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    assert bc._bundled_dotenv_path() is None
+
+
+def test_bundled_dotenv_path_when_frozen_and_file(tmp_path, monkeypatch):
+    import bridge_core as bc
+
+    mei = tmp_path / "meipass"
+    mei.mkdir()
+    dotenv = mei / ".env"
+    dotenv.write_text("X=1\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(mei), raising=False)
+    assert bc._bundled_dotenv_path() == dotenv
+
+
+def test_bundled_dotenv_path_none_when_missing_in_bundle(tmp_path, monkeypatch):
+    import bridge_core as bc
+
+    mei = tmp_path / "meipass"
+    mei.mkdir()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(mei), raising=False)
+    assert bc._bundled_dotenv_path() is None
 
 
 def test_read_cortex_env_reflects_os(monkeypatch):
