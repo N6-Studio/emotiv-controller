@@ -706,7 +706,7 @@ class EmotivBridgeApp(toga.App):
             row = toga.Box(style=Pack(direction=ROW, padding_top=4))
             row.add(toga.Label(cmd, style=Pack(width=80)))
             te = toga.TextInput(
-                str(self.config_data.com_key_bindings.get(cmd, "")),
+                value=str(self.config_data.com_key_bindings.get(cmd, "")),
                 style=Pack(flex=1),
             )
             row.add(te)
@@ -779,7 +779,7 @@ class EmotivBridgeApp(toga.App):
         for key in APP_ENV_UI_KEYS:
             row = toga.Box(style=Pack(direction=ROW, padding_top=6))
             row.add(toga.Label(key, style=Pack(width=180)))
-            ti = toga.TextInput(initial[key], style=Pack(flex=1))
+            ti = toga.TextInput(value=initial[key], style=Pack(flex=1))
             row.add(ti)
             inner.add(row)
             env_inputs[key] = ti
