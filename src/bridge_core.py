@@ -533,7 +533,7 @@ class CortexClient(threading.Thread):
 
 def _status_clears_connection_error_ui(status: str) -> bool:
     """Main-view status line is shared with Cortex progress and local UI hints."""
-    if status.startswith("Simulated keyboard "):
+    if status.startswith("Keyboard presses "):
         return False
     if status.startswith("Keyboard shortcut is "):
         return False

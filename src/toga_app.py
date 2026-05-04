@@ -218,9 +218,9 @@ class EmotivBridgeApp(toga.App):
         self.config_data.keyboard_enabled = not self.config_data.keyboard_enabled
         save_config(self.config_data)
         self.status_queue.put(
-            "Simulated keyboard on"
+            "Keyboard presses on"
             if self.config_data.keyboard_enabled
-            else "Simulated keyboard off"
+            else "Keyboard presses off"
         )
 
     def _install_pynput_hotkey(self) -> None:
@@ -608,7 +608,7 @@ class EmotivBridgeApp(toga.App):
         screen.add(form)
 
         kb_sw = toga.Switch(
-            "Enable simulated keyboard",
+            "Keyboard presses",
             value=self.config_data.keyboard_enabled,
         )
         form.add(kb_sw)
@@ -922,9 +922,9 @@ class EmotivBridgeApp(toga.App):
 
         if self.keyboard_label is not None:
             self.keyboard_label.text = (
-                "Simulated keyboard: on"
+                "Keyboard presses: on"
                 if self.config_data.keyboard_enabled
-                else "Simulated keyboard: off"
+                else "Keyboard presses: off"
             )
 
         if self.current_view == "main" and self.com_power_labels:
