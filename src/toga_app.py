@@ -165,6 +165,21 @@ class EmotivBridgeApp(toga.App):
         )
         self.main_window.content = self.main_column
 
+        self.commands.add(
+            toga.Command(
+                self._on_calibrate_pressed,
+                text="Calibrate",
+                group=toga.Group.FILE,
+                order=10,
+            ),
+            toga.Command(
+                self.show_settings_view,
+                text="Settings",
+                group=toga.Group.FILE,
+                order=20,
+            ),
+        )
+
         self.show_main_view()
         self.start_shortcut_listener()
 
@@ -441,17 +456,6 @@ class EmotivBridgeApp(toga.App):
         info.add(self.status_label)
         self.xy_label = toga.Label("x=0 · y=0", style=Pack(padding_top=6, font_size=12))
         info.add(self.xy_label)
-
-        btns = toga.Box(style=Pack(direction=ROW))
-        top.add(btns)
-        btns.add(
-            toga.Button(
-                "Calibrate",
-                on_press=self._on_calibrate_pressed,
-                style=Pack(padding_right=8),
-            )
-        )
-        btns.add(toga.Button("Settings", on_press=lambda w: self.show_settings_view()))
 
         body = toga.Box(style=Pack(direction=COLUMN, flex=1))
         ph.add(body)
