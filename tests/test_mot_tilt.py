@@ -47,8 +47,12 @@ def test_mot_to_tilt_xy_cortex_sample_with_cols():
         23.221568,
     ]
     cols = list(_MOT_COLS_12)
+    pr = accel_to_pitch_roll(0.948257, -0.354986, -0.083497)
+    expect_x = math.degrees(pr[0])
+    expect_y = math.degrees(pr[1])
     x, y = mot_to_tilt_xy(mot, cols)
-    assert math.isfinite(x) and math.isfinite(y)
+    assert x == pytest.approx(expect_x)
+    assert y == pytest.approx(expect_y)
     assert x != pytest.approx(float(mot[-2]))
     assert y != pytest.approx(float(mot[-1]))
 
@@ -68,12 +72,35 @@ def test_mot_to_tilt_xy_twelve_elements_without_cols():
         -86.970985,
         23.221568,
     ]
+    pr = accel_to_pitch_roll(0.948257, -0.354986, -0.083497)
     x, y = mot_to_tilt_xy(mot, None)
-    assert math.isfinite(x) and math.isfinite(y)
+    assert x == pytest.approx(math.degrees(pr[0]))
+    assert y == pytest.approx(math.degrees(pr[1]))
 
 
 def test_mot_to_tilt_xy_legacy_short_array():
     assert mot_to_tilt_xy([0, 0, 3.0, 4.0], None) == (3.0, 4.0)
+
+
+def test_mot_to_tilt_falls_back_to_quaternion_when_acc_not_finite():
+    mot = [
+        48,
+        0,
+        0.735341,
+        0.255615,
+        0.627441,
+        -0.015869,
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        -44.656766,
+        -86.970985,
+        23.221568,
+    ]
+    pr = quaternion_to_pitch_roll(0.735341, 0.255615, 0.627441, -0.015869)
+    x, y = mot_to_tilt_xy(mot, list(_MOT_COLS_12))
+    assert x == pytest.approx(math.degrees(pr[0]))
+    assert y == pytest.approx(math.degrees(pr[1]))
 
 
 def test_mot_to_tilt_xy_eleven_gyro_layout_accel_fallback():

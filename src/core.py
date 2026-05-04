@@ -86,6 +86,14 @@ def _tilt_from_cols(
     if len(cols) != len(mot):
         return None
     idx = build_mot_index(cols)
+    # Prefer accelerometer for head lean: gravity direction vs device frame.
+    if all(k in idx for k in ("ACCX", "ACCY", "ACCZ")):
+        ax = _float_at(mot, idx["ACCX"])
+        ay = _float_at(mot, idx["ACCY"])
+        az = _float_at(mot, idx["ACCZ"])
+        if all(math.isfinite(v) for v in (ax, ay, az)):
+            p, r = accel_to_pitch_roll(ax, ay, az)
+            return math.degrees(p), math.degrees(r)
     if all(k in idx for k in ("Q0", "Q1", "Q2", "Q3")):
         q0 = _float_at(mot, idx["Q0"])
         q1 = _float_at(mot, idx["Q1"])
@@ -94,22 +102,16 @@ def _tilt_from_cols(
         if all(math.isfinite(v) for v in (q0, q1, q2, q3)):
             p, r = quaternion_to_pitch_roll(q0, q1, q2, q3)
             return math.degrees(p), math.degrees(r)
-    if all(k in idx for k in ("ACCX", "ACCY", "ACCZ")):
-        ax = _float_at(mot, idx["ACCX"])
-        ay = _float_at(mot, idx["ACCY"])
-        az = _float_at(mot, idx["ACCZ"])
-        if all(math.isfinite(v) for v in (ax, ay, az)):
-            p, r = accel_to_pitch_roll(ax, ay, az)
-            return math.degrees(p), math.degrees(r)
     return None
 
 
 def mot_to_tilt_xy(mot: list[Any], cols: list[str] | None) -> tuple[float, float]:
     """Map a Cortex ``mot`` array to (pitch°, roll°) for head lean.
 
-    When no column metadata is available, 12- and 11-length arrays use the standard
-    Insight layouts from the Cortex API docs; shorter arrays keep the previous
-    ``mot[-2]``, ``mot[-1]`` convention (synthetic / dev servers).
+    Uses ``ACCX/Y/Z`` first when present (gravity tilt); otherwise quaternion
+    ``Q0``–``Q3``. When no column metadata is available, 12- and 11-length arrays
+    use the standard Insight layouts from the Cortex API docs; shorter arrays keep
+    the previous ``mot[-2]``, ``mot[-1]`` convention (synthetic / dev servers).
     """
     if not mot or len(mot) < 2:
         return 0.0, 0.0

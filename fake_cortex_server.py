@@ -75,19 +75,6 @@ def _handle_method(method: str, _params: dict) -> dict:
     return {}
 
 
-def _quat_mul(
-    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
-) -> tuple[float, float, float, float]:
-    w0, x0, y0, z0 = a
-    w1, x1, y1, z1 = b
-    return (
-        w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
-        w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
-        w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
-        w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
-    )
-
-
 async def _stream_loop(websocket: Any, interval: float, include_com: bool) -> None:
     """Send mot (and optionally com) messages until the connection dies."""
     t = 0.0
@@ -96,19 +83,21 @@ async def _stream_loop(websocket: Any, interval: float, include_com: bool) -> No
         t += interval
         pitch_rad = math.radians(12.0 * math.sin(t * 1.5))
         roll_rad = math.radians(8.0 * math.cos(t * 1.1))
-        q_pitch = (math.cos(pitch_rad / 2), 0.0, math.sin(pitch_rad / 2), 0.0)
-        q_roll = (math.cos(roll_rad / 2), math.sin(roll_rad / 2), 0.0, 0.0)
-        w, x, y, z = _quat_mul(q_roll, q_pitch)
+        # Synthetic ACC matching ``accel_to_pitch_roll`` in ``core`` so manual testing moves with tilt.
+        az = 1.0
+        ay = math.tan(roll_rad) * az
+        h = math.hypot(ay, az)
+        ax = -math.tan(pitch_rad) * h
         mot = [
             0,
             0,
-            round(w, 6),
-            round(x, 6),
-            round(y, 6),
-            round(z, 6),
-            0.948257,
-            -0.354986,
-            -0.083497,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            round(ax, 6),
+            round(ay, 6),
+            round(az, 6),
             -44.656766,
             -86.970985,
             23.221568,
