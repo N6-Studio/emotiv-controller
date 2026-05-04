@@ -91,22 +91,9 @@ Secondary support:
 
 ## 7. Configuration
 
-### 7.1 Environment Configuration
+### 7.1 Persisted local configuration (`config.json`)
 
-The app should read the following values from `.env`:
-
-```env
-EMOTIV_CLIENT_ID=your_client_id
-EMOTIV_CLIENT_SECRET=your_client_secret
-EMOTIV_LICENSE=
-EMOTIV_DEBIT=1
-CORTEX_URL=wss://localhost:6868
-STREAMS=mot,com
-```
-
-### 7.2 Persisted Local Configuration
-
-The app should persist user settings in a local JSON file, for example:
+The app persists **all** user settings, including Cortex connection fields, in a local JSON file (for example `config.json` next to the executable or the working directory). Relevant keys include:
 
 ```json
 {
@@ -120,14 +107,24 @@ The app should persist user settings in a local JSON file, for example:
     "left": "a",
     "backward": "s",
     "right": "d"
-  }
+  },
+  "cortex_url": "wss://localhost:6868",
+  "cortex_streams": "mot,com",
+  "emotiv_client_id": "your_client_id",
+  "emotiv_client_secret": "your_client_secret",
+  "emotiv_license": "",
+  "emotiv_debit": 1
 }
 ```
 
-### 7.3 Default Values
+### 7.2 Default Values
 
 | Setting                        | Default |
 | ------------------------------ | ------: |
+| Cortex URL (`cortex_url`)      | `wss://localhost:6868` |
+| Streams (`cortex_streams`)     | `mot` |
+| EMOTIV license / debit           | `""` / `1` |
+| Client ID / secret             | `""` (must be set to connect) |
 | Movement threshold             |   `5.0` |
 | Keyboard simulation            | `false` |
 | Mental command power threshold |  `0.25` |
@@ -548,7 +545,7 @@ If no samples are collected during calibration:
 
 ### 17.1 File Location
 
-Initial version may store settings in a local `config.json` file next to the application script.
+Store settings and Cortex connection fields in a local `config.json` file next to the application (or the process working directory).
 
 ### 17.2 Persistence Timing
 

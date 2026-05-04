@@ -1,16 +1,14 @@
 import json
-import os
 import ssl
 import sys
 import threading
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Callable, Optional
 
 import websocket
-from dotenv import load_dotenv
 from core import (
     COM_MAPPED_MENTAL_ACTIONS,
     compute_motion_movements,
@@ -23,30 +21,6 @@ from update_service import (
     get_app_version,
     get_update_manifest_url,
 )
-
-APP_ENV_PATH = Path("app.env")
-
-
-def _bundled_dotenv_path() -> Optional[Path]:
-    """PyInstaller onefile: project ``.env`` copied to the bundle root (see app.spec)."""
-    if not getattr(sys, "frozen", False):
-        return None
-    mei = getattr(sys, "_MEIPASS", None)
-    if not mei:
-        return None
-    p = Path(mei) / ".env"
-    return p if p.is_file() else None
-
-
-def _apply_startup_dotenv() -> None:
-    load_dotenv()
-    bundled = _bundled_dotenv_path()
-    if bundled is not None:
-        load_dotenv(bundled, override=False)
-    load_dotenv(APP_ENV_PATH, override=True)
-
-
-_apply_startup_dotenv()
 
 
 def _default_pynput_keyboard():
@@ -92,7 +66,7 @@ DEFAULT_COM_KEY_BINDINGS = {
     "right": "f",
 }
 
-# Keys written to app.env by the environment settings UI (stable order).
+# Labels for the Cortex connection settings form (values live on ``AppConfig``).
 APP_ENV_UI_KEYS = [
     "CORTEX_URL",
     "STREAMS",
@@ -113,106 +87,6 @@ class CortexEnv:
     debit: int
 
 
-def _env_nonempty(key: str) -> Optional[str]:
-    """Return stripped value or None if unset or blank (dotenv often sets KEY= as empty string)."""
-    raw = os.getenv(key)
-    if raw is None:
-        return None
-    s = raw.strip()
-    return s if s else None
-
-
-def _env_str_default(key: str, default: str) -> str:
-    v = _env_nonempty(key)
-    return v if v is not None else default
-
-
-def _parse_emotiv_debit() -> int:
-    raw = os.getenv("EMOTIV_DEBIT")
-    if raw is None or not raw.strip():
-        return 1
-    try:
-        return int(raw.strip())
-    except ValueError:
-        return 1
-
-
-def read_cortex_env() -> CortexEnv:
-    return CortexEnv(
-        cortex_url=_env_str_default("CORTEX_URL", "wss://localhost:6868"),
-        streams=[
-            s.strip()
-            for s in _env_str_default("STREAMS", "mot").split(",")
-            if s.strip()
-        ],
-        client_id=_env_nonempty("EMOTIV_CLIENT_ID"),
-        client_secret=_env_nonempty("EMOTIV_CLIENT_SECRET"),
-        license=_env_str_default("EMOTIV_LICENSE", ""),
-        debit=_parse_emotiv_debit(),
-    )
-
-
-def app_env_form_values() -> dict[str, str]:
-    """Current effective values for the env settings form (read from os.environ)."""
-    ce = read_cortex_env()
-    return {
-        "CORTEX_URL": ce.cortex_url,
-        "STREAMS": ",".join(ce.streams),
-        "EMOTIV_CLIENT_ID": ce.client_id or "",
-        "EMOTIV_CLIENT_SECRET": ce.client_secret or "",
-        "EMOTIV_LICENSE": ce.license,
-        "EMOTIV_DEBIT": str(ce.debit),
-    }
-
-
-def _env_value_needs_quotes(value: str) -> bool:
-    if not value:
-        return False
-    if any(c in value for c in ' \t#"\'\\\n\r'):
-        return True
-    return False
-
-
-def format_env_file_line(key: str, value: str) -> str:
-    if _env_value_needs_quotes(value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'{key}="{escaped}"'
-    return f"{key}={value}"
-
-
-def write_app_env_file(path: Path, values: dict[str, str]) -> None:
-    lines = [format_env_file_line(k, values.get(k, "")) for k in APP_ENV_UI_KEYS]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def read_app_env_file_dict(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {k: "" for k in APP_ENV_UI_KEYS}
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
-        return {k: "" for k in APP_ENV_UI_KEYS}
-    out = {k: "" for k in APP_ENV_UI_KEYS}
-    for line in raw.splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-        if "=" not in s:
-            continue
-        key, val = s.split("=", 1)
-        key = key.strip()
-        if key not in out:
-            continue
-        val = val.strip()
-        if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
-            inner = val[1:-1]
-            val = inner.replace("\\\\", "\\").replace('\\"', '"')
-        out[key] = val
-    return out
-
-
-def reload_app_env_into_os(path: Path = APP_ENV_PATH) -> None:
-    load_dotenv(path, override=True)
 MOVEMENTS = {
     "forward": {
         "label": "W",
@@ -249,6 +123,12 @@ class AppConfig:
     com_power_threshold: float = DEFAULT_COM_POWER_THRESHOLD
     key_bindings: dict = None
     com_key_bindings: dict = None
+    cortex_url: str = "wss://localhost:6868"
+    cortex_streams: str = "mot"
+    emotiv_client_id: str = ""
+    emotiv_client_secret: str = ""
+    emotiv_license: str = ""
+    emotiv_debit: int = 1
 
     def __post_init__(self):
         if self.key_bindings is None:
@@ -275,6 +155,11 @@ class AppConfig:
                 else:
                     merged[cmd] = str(v).strip()
             self.com_key_bindings = merged
+        if not isinstance(self.emotiv_debit, int):
+            try:
+                self.emotiv_debit = int(str(self.emotiv_debit).strip())
+            except (TypeError, ValueError):
+                self.emotiv_debit = 1
 
 
 def load_config() -> AppConfig:
@@ -284,7 +169,11 @@ def load_config() -> AppConfig:
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return AppConfig(**raw)
+        if not isinstance(raw, dict):
+            return AppConfig()
+        allowed = {f.name for f in fields(AppConfig)}
+        filtered = {k: v for k, v in raw.items() if k in allowed}
+        return AppConfig(**filtered)
     except Exception:
         return AppConfig()
 
@@ -295,6 +184,64 @@ def save_config(config: AppConfig):
         json.dumps(asdict(config), indent=2),
         encoding="utf-8",
     )
+
+
+def _str_or_default(value: Optional[str], default: str) -> str:
+    if value is None:
+        return default
+    s = str(value).strip()
+    return s if s else default
+
+
+def _optional_str(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s if s else None
+
+
+def read_cortex_env(config: Optional[AppConfig] = None) -> CortexEnv:
+    """Build ``CortexEnv`` from ``config`` or from ``load_config()``."""
+    cfg = config if config is not None else load_config()
+    cortex_url = _str_or_default(cfg.cortex_url, "wss://localhost:6868")
+    streams_raw = _str_or_default(cfg.cortex_streams, "mot")
+    streams = [s.strip() for s in streams_raw.split(",") if s.strip()]
+    if not streams:
+        streams = ["mot"]
+    return CortexEnv(
+        cortex_url=cortex_url,
+        streams=streams,
+        client_id=_optional_str(cfg.emotiv_client_id),
+        client_secret=_optional_str(cfg.emotiv_client_secret),
+        license=_str_or_default(cfg.emotiv_license, ""),
+        debit=int(cfg.emotiv_debit),
+    )
+
+
+def app_env_form_values(config: AppConfig) -> dict[str, str]:
+    """Values for the environment settings form from ``config``."""
+    ce = read_cortex_env(config)
+    return {
+        "CORTEX_URL": ce.cortex_url,
+        "STREAMS": ",".join(ce.streams),
+        "EMOTIV_CLIENT_ID": ce.client_id or "",
+        "EMOTIV_CLIENT_SECRET": ce.client_secret or "",
+        "EMOTIV_LICENSE": ce.license,
+        "EMOTIV_DEBIT": str(ce.debit),
+    }
+
+
+def apply_cortex_env_form_to_config(config: AppConfig, values: dict[str, str]) -> None:
+    """Apply form dict (``APP_ENV_UI_KEYS``) onto ``config`` in place."""
+    config.cortex_url = _str_or_default(values.get("CORTEX_URL"), "wss://localhost:6868")
+    config.cortex_streams = _str_or_default(values.get("STREAMS"), "mot")
+    config.emotiv_client_id = (values.get("EMOTIV_CLIENT_ID") or "").strip()
+    config.emotiv_client_secret = (values.get("EMOTIV_CLIENT_SECRET") or "").strip()
+    config.emotiv_license = (values.get("EMOTIV_LICENSE") or "").strip()
+    try:
+        config.emotiv_debit = int((values.get("EMOTIV_DEBIT") or "1").strip())
+    except ValueError:
+        config.emotiv_debit = 1
 
 
 class SimulatedKeyboard:
@@ -408,7 +355,7 @@ class CortexClient(threading.Thread):
         if not env.client_id or not env.client_secret:
             self.on_error(
                 "Missing EMOTIV_CLIENT_ID or EMOTIV_CLIENT_SECRET "
-                "(set in .env or app environment settings)"
+                "(set in config.json under Settings → Environment variables)"
             )
             return
 
@@ -420,15 +367,19 @@ class CortexClient(threading.Thread):
             on_close=self._on_close,
         )
 
-        websocket_thread = threading.Thread(
-            target=lambda: self.ws_app.run_forever(
-                sslopt={
-                    "cert_reqs": ssl.CERT_NONE,
-                    "check_hostname": False,
-                }
-            ),
-            daemon=True,
-        )
+        def _run_forever() -> None:
+            url = env.cortex_url.strip()
+            if url.lower().startswith("wss://"):
+                self.ws_app.run_forever(
+                    sslopt={
+                        "cert_reqs": ssl.CERT_NONE,
+                        "check_hostname": False,
+                    }
+                )
+            else:
+                self.ws_app.run_forever()
+
+        websocket_thread = threading.Thread(target=_run_forever, daemon=True)
         websocket_thread.start()
 
         if not self.connected_event.wait(timeout=15):

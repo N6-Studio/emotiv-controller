@@ -1,5 +1,4 @@
 # Runtime dependencies for src/ app + PyInstaller (CI and local installs).
 websocket-client>=1.6,<2
-python-dotenv>=1.0,<2
 pynput>=1.7,<2
 toga>=0.4.5,<0.5

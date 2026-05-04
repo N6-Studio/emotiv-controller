@@ -53,6 +53,21 @@ def test_load_config_corrupt_json(monkeypatch, tmp_path):
     assert cfg.neutral_x is None
 
 
+def test_load_config_ignores_unknown_json_keys(monkeypatch, tmp_path):
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"debug_mode": true, "future_field": 99, "cortex_url": "wss://x"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    cfg = app_module.load_config()
+    assert cfg.debug_mode is True
+    assert cfg.cortex_url == "wss://x"
+    assert not hasattr(cfg, "future_field")
+
+
 def test_appconfig_com_key_bindings_merge_blank():
     from app import AppConfig
 

@@ -7,10 +7,6 @@ _emotiv_console = os.environ.get("EMOTIV_PYI_DEBUG", "0").strip().lower() in ("1
 _spec_dir = os.path.abspath(os.path.dirname(SPEC))
 
 _datas = [(os.path.join(_spec_dir, "assets", "app.ico"), "assets")]
-_dotenv_src = os.path.join(_spec_dir, ".env")
-if os.path.isfile(_dotenv_src):
-    # Baked defaults for the frozen EXE; bridge_core loads from sys._MEIPASS.
-    _datas.append((_dotenv_src, "."))
 
 a = Analysis(
     [os.path.join(_spec_dir, "src", "app.py")],

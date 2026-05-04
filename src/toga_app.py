@@ -23,14 +23,15 @@ from toga.style import Pack
 from toga.style.pack import CENTER, COLUMN, HIDDEN, ROW, TOP, VISIBLE
 
 from bridge_core import (
-    APP_ENV_PATH,
     APP_ENV_UI_KEYS,
     COM_MAPPED_MENTAL_ACTIONS,
+    CONFIG_PATH,
     CortexClient,
     DEFAULT_COM_KEY_BINDINGS,
     MOVEMENTS,
     SimulatedKeyboard,
     _status_clears_connection_error_ui,
+    apply_cortex_env_form_to_config,
     apply_staged_update,
     app_env_form_values,
     check_update_available,
@@ -39,9 +40,7 @@ from bridge_core import (
     get_update_manifest_url,
     load_config,
     mental_command_to_sets,
-    reload_app_env_into_os,
     save_config,
-    write_app_env_file,
 )
 from core import compute_motion_movements
 from update_service import semver_less
@@ -721,15 +720,14 @@ class EmotivBridgeApp(toga.App):
     def show_env_settings_view(self, widget: Optional[toga.Widget] = None) -> None:
         self.current_view = "env_settings"
         self._clear_panel_host()
-        reload_app_env_into_os()
         assert self.panel_host is not None
         ph = self.panel_host
 
         ph.add(toga.Label("Environment variables", style=Pack(font_size=22, font_weight="bold", padding_top=16, padding_bottom=8)))
         ph.add(
             toga.Label(
-                f"Values are saved to {APP_ENV_PATH.name} "
-                "(separate from config.json). Restart uses the updated connection.",
+                f"Values are saved to {CONFIG_PATH.name} with your other settings. "
+                "Saving reconnects Cortex with the updated connection.",
                 style=Pack(color="#6b7280", font_size=10, text_align="center", padding_bottom=10),
             )
         )
@@ -738,7 +736,7 @@ class EmotivBridgeApp(toga.App):
         scroll = toga.ScrollContainer(content=inner, style=Pack(flex=1, height=260), horizontal=False, vertical=True)
         ph.add(scroll)
 
-        initial = app_env_form_values()
+        initial = app_env_form_values(self.config_data)
         env_inputs: dict[str, toga.TextInput] = {}
         for key in APP_ENV_UI_KEYS:
             row = toga.Box(style=Pack(direction=ROW, padding_top=6))
@@ -755,8 +753,8 @@ class EmotivBridgeApp(toga.App):
             except ValueError:
                 self.main_window.error_dialog("Invalid value", "EMOTIV_DEBIT must be an integer.")
                 return
-            write_app_env_file(APP_ENV_PATH, raw)
-            reload_app_env_into_os()
+            apply_cortex_env_form_to_config(self.config_data, raw)
+            save_config(self.config_data)
             self._restart_cortex_client(
                 clear_error_ui=True,
                 status_message="Reconnecting after env update...",

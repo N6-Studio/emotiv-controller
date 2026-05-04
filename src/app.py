@@ -9,7 +9,6 @@ def _pynput_keyboard():
 _pynput_keyboard.__emotiv_default_pynput__ = True
 
 from bridge_core import (
-    APP_ENV_PATH,
     APP_ENV_UI_KEYS,
     AppConfig,
     CONFIG_PATH,
@@ -20,14 +19,11 @@ from bridge_core import (
     DEFAULT_THRESHOLD,
     MOVEMENTS,
     SimulatedKeyboard,
+    apply_cortex_env_form_to_config,
     app_env_form_values,
-    format_env_file_line,
     load_config,
-    read_app_env_file_dict,
     read_cortex_env,
-    reload_app_env_into_os,
     save_config,
-    write_app_env_file,
 )
 
 

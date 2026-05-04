@@ -37,7 +37,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-The window is built with **BeeWare Toga** (native controls on Windows). Always run commands from this `python` folder so it finds `config.json`, `app.env`, and related files (`run.py` adds `src` to the import path).
+The window is built with **BeeWare Toga** (native controls on Windows). Always run commands from this `python` folder so it finds `config.json` (`run.py` adds `src` to the import path). Cortex connection fields (URL, streams, client id/secret, license, debit) live in `config.json` with the rest of your settings.
 
 ---
 
