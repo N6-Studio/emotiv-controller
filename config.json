@@ -1,15 +1,16 @@
 {
-  "neutral_x": 1.5,
-  "neutral_y": -2.0,
+  "neutral_x": null,
+  "neutral_y": null,
   "threshold": 5.0,
-  "threshold_global": false,
+  "threshold_global": true,
   "movement_thresholds": {
     "forward": 5.0,
     "left": 5.0,
     "backward": 5.0,
     "right": 5.0
   },
-  "keyboard_enabled": true,
+  "keyboard_enabled": false,
+  "debug_mode": false,
   "com_power_threshold": 0.25,
   "key_bindings": {
     "forward": "w",
@@ -22,5 +23,11 @@
     "pull": "e",
     "left": "r",
     "right": "f"
-  }
+  },
+  "cortex_url": "ws://localhost:6868",
+  "cortex_streams": "mot,com",
+  "emotiv_client_id": "your_client_id",
+  "emotiv_client_secret": "your_client_secret",
+  "emotiv_license": "",
+  "emotiv_debit": 1
 }
