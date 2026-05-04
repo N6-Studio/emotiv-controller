@@ -10,6 +10,13 @@ def test_load_config_missing_file(monkeypatch, tmp_path):
     cfg = app_module.load_config()
     assert cfg.neutral_x is None
     assert cfg.neutral_y is None
+    assert cfg.debug_mode is False
+
+
+def test_appconfig_debug_mode_default():
+    from app import AppConfig
+
+    assert AppConfig().debug_mode is False
 
 
 def test_load_save_round_trip(monkeypatch, tmp_path):
@@ -22,6 +29,7 @@ def test_load_save_round_trip(monkeypatch, tmp_path):
         neutral_y=-2.0,
         keyboard_enabled=True,
         threshold_global=False,
+        debug_mode=True,
     )
     app_module.save_config(original)
     loaded = app_module.load_config()
@@ -29,8 +37,10 @@ def test_load_save_round_trip(monkeypatch, tmp_path):
     assert loaded.neutral_y == -2.0
     assert loaded.keyboard_enabled is True
     assert loaded.threshold_global is False
+    assert loaded.debug_mode is True
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["neutral_x"] == 1.5
+    assert raw["debug_mode"] is True
 
 
 def test_load_config_corrupt_json(monkeypatch, tmp_path):

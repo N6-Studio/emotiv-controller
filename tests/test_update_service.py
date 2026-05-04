@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 import update_service as us
@@ -66,6 +68,42 @@ def test_check_update_available_newer(monkeypatch):
     assert err is None
     assert newer is True
     assert m["version"] == "1.1.0"
+
+
+def test_launch_windows_updater_ps1_respects_debug(monkeypatch, tmp_path):
+    captured: dict = {}
+
+    def fake_popen(args, **kwargs):
+        captured["ps1"] = Path(args[-1])
+        return type("P", (), {"pid": 42})()
+
+    monkeypatch.setattr(us.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(us.sys, "platform", "win32")
+
+    current = tmp_path / "app.exe"
+    staged = tmp_path / "staged.exe"
+    current.write_bytes(b"a")
+    staged.write_bytes(b"b")
+
+    us.launch_windows_updater(
+        current_exe=current,
+        staged_exe=staged,
+        pid=999,
+        debug=False,
+    )
+    text = captured["ps1"].read_text(encoding="utf-8")
+    assert "_AgentDbg" not in text
+    assert "$DebugLogPath" not in text
+
+    us.launch_windows_updater(
+        current_exe=current,
+        staged_exe=staged,
+        pid=999,
+        debug=True,
+    )
+    text_dbg = captured["ps1"].read_text(encoding="utf-8")
+    assert "_AgentDbg" in text_dbg
+    assert "$DebugLogPath" in text_dbg
 
 
 def test_check_update_available_up_to_date(monkeypatch):

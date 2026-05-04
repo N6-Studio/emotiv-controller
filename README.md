@@ -28,16 +28,16 @@ A small window shows what the app thinks you are doing (forward, back, left, rig
 
 ## If you are running it from the project folder (for advanced users)
 
-You need **Python 3** (3.10 or newer is a good choice). Open a terminal in the `python` folder, create a virtual environment, install dependencies, then start the app:
+You need **Python 3** (3.10 through 3.13 recommended on Windows for the Toga WinForms stack; 3.14 may require a prerelease `pythonnet`). Open a terminal in the `python` folder, create a virtual environment, install dependencies, then start the app:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install websocket-client python-dotenv pynput
+pip install -r requirements.txt
 python app.py
 ```
 
-Always start the app from the same folder as `app.py` so it finds your settings files.
+The window is built with **BeeWare Toga** (native controls on Windows). Always start the app from the same folder as `app.py` so it finds your settings files.
 
 ---
 

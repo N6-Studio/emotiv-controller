@@ -3,3 +3,4 @@ build
 __pycache__
 _release_info.py
 app.env
+EmotivController.log

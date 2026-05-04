@@ -1,8 +1,8 @@
 {
-  "neutral_x": 70.12,
-  "neutral_y": -0.31,
+  "neutral_x": 1.5,
+  "neutral_y": -2.0,
   "threshold": 5.0,
-  "threshold_global": true,
+  "threshold_global": false,
   "movement_thresholds": {
     "forward": 5.0,
     "left": 5.0,

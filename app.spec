@@ -9,7 +9,12 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=[
+        'bridge_core',
+        'toga_app',
+        'toga',
+        'toga_winforms',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

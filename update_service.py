@@ -10,10 +10,54 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Optional
+
+UPDATE_DEBUG_LOG_FILENAME = "EmotivController.log"
+
+# region agent log
+def _resolve_debug_log_path() -> Path:
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        candidates.append(
+            Path(sys.executable).resolve().parent / UPDATE_DEBUG_LOG_FILENAME
+        )
+    candidates.append(Path(__file__).resolve().parent / UPDATE_DEBUG_LOG_FILENAME)
+    candidates.append(Path(tempfile.gettempdir()) / UPDATE_DEBUG_LOG_FILENAME)
+    for p in candidates:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "a", encoding="utf-8"):
+                pass
+            return p
+        except OSError:
+            continue
+    return Path(tempfile.gettempdir()) / UPDATE_DEBUG_LOG_FILENAME
+
+
+def _agent_debug_log(
+    hypothesis_id: str, location: str, message: str, data: Optional[dict[str, Any]] = None
+) -> None:
+    try:
+        payload: dict[str, Any] = {
+            "sessionId": "433c80",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "timestamp": int(time.time() * 1000),
+        }
+        if data is not None:
+            payload["data"] = data
+        with open(_resolve_debug_log_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+# endregion agent log
 
 try:
     from _release_info import APP_VERSION as _REL_APP_VERSION
@@ -136,6 +180,7 @@ def launch_windows_updater(
     current_exe: Path,
     staged_exe: Path,
     pid: int,
+    debug: bool = False,
 ) -> None:
     if sys.platform != "win32":
         raise RuntimeError("In-place update is only supported on Windows")
@@ -149,27 +194,86 @@ def launch_windows_updater(
         f"$StagedExe = {repr(str(staged_exe))}\n"
         f"$ScriptPath = {repr(str(ps1))}\n"
     )
-    body = r"""
+    dbg_path: Optional[Path] = None
+    if debug:
+        dbg_path = _resolve_debug_log_path()
+        invocation += f"$DebugLogPath = {repr(str(dbg_path))}\n"
+        body = r"""
+$ErrorActionPreference = 'Stop'
+function _AgentDbg([string]$h,[string]$m){
+  try{
+    $ts = [Math]::Floor([decimal](((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds))
+    $payload = [ordered]@{sessionId='433c80';hypothesisId=$h;location='emotiv_update.ps1';message=$m;timestamp=$ts}
+    Add-Content -LiteralPath $DebugLogPath -Value ($payload | ConvertTo-Json -Compress) -Encoding UTF8
+  } catch {}
+}
+_AgentDbg 'PS-A' 'updater_ps1_started'
+while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+    Start-Sleep -Milliseconds 300
+}
+_AgentDbg 'PS-B' 'target_pid_exited'
+try {
+  $parent = Split-Path -LiteralPath $CurrentExe
+  $leaf = Split-Path -Leaf $CurrentExe
+  $backup = Join-Path $parent ($leaf + '.old')
+  if (Test-Path -LiteralPath $backup) {
+    Remove-Item -LiteralPath $backup -Force
+  }
+  _AgentDbg 'PS-C' 'before_rename_current_exe'
+  Rename-Item -LiteralPath $CurrentExe -NewName ($leaf + '.old') -Force
+  _AgentDbg 'PS-D' 'after_rename_before_move_staged'
+  Move-Item -LiteralPath $StagedExe -Destination $CurrentExe -Force
+  _AgentDbg 'PS-E' 'after_move_before_start_process'
+  Start-Process -FilePath $CurrentExe -WorkingDirectory $parent
+  _AgentDbg 'PS-F' 'after_start_process'
+} catch {
+  _AgentDbg 'PS-G' ('rename_move_or_start_failed: ' + $_.Exception.Message)
+  throw
+}
+Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
+""".strip()
+    else:
+        body = r"""
 $ErrorActionPreference = 'Stop'
 while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
     Start-Sleep -Milliseconds 300
 }
-$parent = Split-Path -LiteralPath $CurrentExe
-$leaf = Split-Path -Leaf $CurrentExe
-$backup = Join-Path $parent ($leaf + '.old')
-if (Test-Path -LiteralPath $backup) {
+try {
+  $parent = Split-Path -LiteralPath $CurrentExe
+  $leaf = Split-Path -Leaf $CurrentExe
+  $backup = Join-Path $parent ($leaf + '.old')
+  if (Test-Path -LiteralPath $backup) {
     Remove-Item -LiteralPath $backup -Force
+  }
+  Rename-Item -LiteralPath $CurrentExe -NewName ($leaf + '.old') -Force
+  Move-Item -LiteralPath $StagedExe -Destination $CurrentExe -Force
+  Start-Process -FilePath $CurrentExe -WorkingDirectory $parent
+} catch {
+  throw
 }
-Rename-Item -LiteralPath $CurrentExe -NewName ($leaf + '.old') -Force
-Move-Item -LiteralPath $StagedExe -Destination $CurrentExe -Force
-Start-Process -FilePath $CurrentExe
 Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
 """.strip()
     ps1.write_text(invocation + "\n" + body + "\n", encoding="utf-8")
 
+    if debug:
+        # region agent log
+        _agent_debug_log(
+            "H1",
+            "update_service.py:launch_windows_updater",
+            "launching_powershell_updater",
+            {
+                "pid": int(pid),
+                "ps1": str(ps1),
+                "dbg_log": str(dbg_path) if dbg_path else "",
+                "current_exe": str(current_exe),
+                "staged_exe": str(staged_exe),
+            },
+        )
+        # endregion agent log
+
     flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
     flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-    subprocess.Popen(
+    proc = subprocess.Popen(
         [
             "powershell.exe",
             "-NoProfile",
@@ -182,6 +286,15 @@ Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
         close_fds=True,
         creationflags=flags,
     )
+    if debug:
+        # region agent log
+        _agent_debug_log(
+            "H2",
+            "update_service.py:launch_windows_updater",
+            "popen_powershell_returned",
+            {"child_pid": getattr(proc, "pid", None)},
+        )
+        # endregion agent log
 
 
 def check_update_available(manifest_url: str) -> tuple[bool, dict[str, str], Optional[str]]:
@@ -218,8 +331,26 @@ def download_and_verify(manifest: dict[str, str]) -> Path:
     return dest
 
 
-def apply_staged_update(staged_exe: Path) -> None:
+def apply_staged_update(staged_exe: Path, *, debug: bool = False) -> None:
     if not getattr(sys, "frozen", False):
         raise RuntimeError("apply_staged_update requires a frozen executable")
     current = Path(sys.executable).resolve()
-    launch_windows_updater(current_exe=current, staged_exe=staged_exe.resolve(), pid=os.getpid())
+    if debug:
+        # region agent log
+        _agent_debug_log(
+            "H5",
+            "update_service.py:apply_staged_update",
+            "before_launch_windows_updater",
+            {
+                "current_exe": str(current),
+                "staged_exe": str(staged_exe.resolve()),
+                "pid": os.getpid(),
+            },
+        )
+        # endregion agent log
+    launch_windows_updater(
+        current_exe=current,
+        staged_exe=staged_exe.resolve(),
+        pid=os.getpid(),
+        debug=debug,
+    )
