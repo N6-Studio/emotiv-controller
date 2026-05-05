@@ -7,6 +7,7 @@ import pytest
 from core import (
     _MOT_COLS_12,
     build_mot_index,
+    mot_quaternion,
     mot_to_tilt_xy,
     quaternion_to_pitch_roll,
 )
@@ -32,6 +33,62 @@ def test_quaternion_pitch_only():
 
 def test_mot_to_tilt_xy_legacy_short_array():
     assert mot_to_tilt_xy([0, 0, 3.0, 4.0], None) == (3.0, 4.0)
+
+
+def test_mot_quaternion_user_sample_matches_stream():
+    mot = [
+        20,
+        0,
+        0.308196,
+        0.582581,
+        -0.390076,
+        0.643005,
+        0.981565,
+        -0.167989,
+        0.019534,
+        -75.353924,
+        61.721796,
+        -3.624854,
+    ]
+    q = mot_quaternion(mot, None)
+    assert q is not None
+    assert q == pytest.approx((0.308196, 0.582581, -0.390076, 0.643005))
+
+
+def test_mot_quaternion_legacy_and_non_finite_return_none():
+    assert mot_quaternion([0, 0, 3.0, 4.0], None) is None
+    mot_nan = [
+        48,
+        0,
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        0.948257,
+        -0.354986,
+        -0.083497,
+        -44.656766,
+        -86.970985,
+        23.221568,
+    ]
+    assert mot_quaternion(mot_nan, list(_MOT_COLS_12)) is None
+
+
+def test_mot_quaternion_eleven_element_gyro_layout_returns_none():
+    mot = [
+        14,
+        0,
+        8206,
+        8187,
+        8181,
+        4235,
+        8668,
+        8128,
+        8294,
+        8237,
+        7938,
+    ]
+    assert mot_quaternion(mot, None) is None
 
 
 def test_mot_to_tilt_xy_user_sample_uses_quaternion():

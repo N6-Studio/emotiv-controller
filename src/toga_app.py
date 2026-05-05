@@ -44,7 +44,12 @@ from bridge_core import (
     mental_command_to_sets,
     save_config,
 )
-from core import compute_motion_movements, mot_to_tilt_xy, resolved_movement_thresholds
+from core import (
+    compute_motion_movements,
+    mot_quaternion,
+    mot_to_tilt_xy,
+    resolved_movement_thresholds,
+)
 from update_service import semver_less
 
 # Live motion readout axis labels when swap_pitch_roll_axes is False (pitch→X, roll→Y).
@@ -132,6 +137,7 @@ class EmotivBridgeApp(toga.App):
 
         self.current_x = 0.0
         self.current_y = 0.0
+        self._last_quat: Optional[tuple[float, float, float, float]] = None
         # Pad highlights from mental commands (last ``com`` frame); head motion is recomputed each UI tick.
         self.com_pad_movements: set[str] = set()
 
@@ -169,6 +175,7 @@ class EmotivBridgeApp(toga.App):
         # Last Cortex / connection line (not keyboard hints) so we can restore after Settings clears widgets.
         self._last_cortex_status: str = "Connecting..."
         self.xy_label: Optional[toga.Label] = None
+        self.quat_labels: Optional[list[toga.Label]] = None
         self.keyboard_label: Optional[toga.Label] = None
         self.calibration_instruction_label: Optional[toga.Label] = None
         self.timer_label: Optional[toga.Label] = None
@@ -390,6 +397,7 @@ class EmotivBridgeApp(toga.App):
         self.review_xy_label = None
         self.review_neutral_label = None
         self.xy_label = None
+        self.quat_labels = None
         self.status_label = None
         self.error_label = None
         self.retry_button = None
@@ -585,6 +593,7 @@ class EmotivBridgeApp(toga.App):
         ph = self.panel_host
         self.com_powers = {a: 0.0 for a in COM_MAPPED_MENTAL_ACTIONS}
         self.com_pad_movements = set()
+        self._last_quat = None
 
         err_box = toga.Box(style=Pack(direction=COLUMN, padding_bottom=8))
         ph.add(err_box)
@@ -623,11 +632,32 @@ class EmotivBridgeApp(toga.App):
         err_box.add(self.retry_button)
 
         lx, ly = _motion_axis_labels(self.config_data)
+        tilt_row = toga.Box(
+            style=Pack(
+                direction=ROW,
+                padding_top=6,
+                padding_left=10,
+                padding_right=10,
+                alignment=TOP,
+            )
+        )
+        err_box.add(tilt_row)
         self.xy_label = toga.Label(
             f"{lx}=0.00° · {ly}=0.00°",
-            style=Pack(padding_top=6, padding_left=10, padding_right=10, font_size=12),
+            style=Pack(font_size=12, flex=1),
         )
-        err_box.add(self.xy_label)
+        tilt_row.add(self.xy_label)
+        quat_col = toga.Box(style=Pack(direction=COLUMN, padding_left=8))
+        tilt_row.add(quat_col)
+        _quat_placeholder = "—"
+        self.quat_labels = []
+        for qi in range(4):
+            lab = toga.Label(
+                f"Q{qi} {_quat_placeholder}",
+                style=Pack(font_size=10, color="#6b7280", text_align=RIGHT),
+            )
+            quat_col.add(lab)
+            self.quat_labels.append(lab)
 
         body = toga.Box(style=Pack(direction=COLUMN, flex=1))
         ph.add(body)
@@ -1133,6 +1163,7 @@ class EmotivBridgeApp(toga.App):
             mot = msg["mot"]
             if len(mot) >= 2:
                 mot_cols = self.cortex.mot_cols if self.cortex is not None else None
+                self._last_quat = mot_quaternion(mot, mot_cols)
                 px, py = mot_to_tilt_xy(mot, mot_cols)
                 cfg = self.config_data
                 pitch_val = -px if cfg.invert_pitch else px
@@ -1287,6 +1318,15 @@ class EmotivBridgeApp(toga.App):
             self.xy_label.text = xy_text
         if self.review_xy_label is not None:
             self.review_xy_label.text = xy_text
+
+        if self.quat_labels:
+            q = self._last_quat
+            if q is not None:
+                for i, lab in enumerate(self.quat_labels):
+                    lab.text = f"Q{i} {q[i]:.5f}"
+            else:
+                for i, lab in enumerate(self.quat_labels):
+                    lab.text = f"Q{i} —"
 
         if self.keyboard_label is not None:
             self.keyboard_label.text = (

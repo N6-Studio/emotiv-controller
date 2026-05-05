@@ -71,7 +71,8 @@ def quaternion_to_pitch_roll(
     return pitch, roll
 
 
-def _tilt_from_cols(mot: list[Any], cols: list[str]) -> tuple[float, float] | None:
+def _quat_tuple_from_mot(mot: list[Any], cols: list[str]) -> tuple[float, float, float, float] | None:
+    """Raw ``(Q0, Q1, Q2, Q3)`` from ``mot`` when ``cols`` names quaternion slots; else ``None``."""
     if len(cols) != len(mot):
         return None
     idx = build_mot_index(cols)
@@ -83,6 +84,14 @@ def _tilt_from_cols(mot: list[Any], cols: list[str]) -> tuple[float, float] | No
     q3 = _float_at(mot, idx["Q3"])
     if not all(math.isfinite(v) for v in (q0, q1, q2, q3)):
         return None
+    return (q0, q1, q2, q3)
+
+
+def _tilt_from_cols(mot: list[Any], cols: list[str]) -> tuple[float, float] | None:
+    quat = _quat_tuple_from_mot(mot, cols)
+    if quat is None:
+        return None
+    q0, q1, q2, q3 = quat
     p, r = quaternion_to_pitch_roll(q0, q1, q2, q3)
     return math.degrees(p), math.degrees(r)
 
@@ -110,6 +119,26 @@ def mot_to_tilt_xy(
         if out is not None:
             return out
     return float(mot[-2] or 0), float(mot[-1] or 0)
+
+
+def mot_quaternion(
+    mot: list[Any],
+    cols: list[str] | None,
+) -> tuple[float, float, float, float] | None:
+    """Raw Cortex quaternion ``(Q0, Q1, Q2, Q3)`` when available, else ``None``.
+
+    Uses the same column resolution as :func:`mot_to_tilt_xy` (named ``cols``,
+    or 12-element default layout). Legacy gyro / short arrays yield ``None``.
+    """
+    if not mot or len(mot) < 2:
+        return None
+    if cols is not None:
+        out = _quat_tuple_from_mot(mot, cols)
+        if out is not None:
+            return out
+    if len(mot) == 12:
+        return _quat_tuple_from_mot(mot, list(_MOT_COLS_12))
+    return None
 
 
 def resolved_movement_thresholds(
