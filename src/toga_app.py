@@ -63,6 +63,24 @@ def _motion_axis_labels(cfg: AppConfig) -> tuple[str, str]:
         return ("roll", "pitch")
     return _TILT_AXIS_LABELS
 
+
+# Separator between quaternion segments (main readout row).
+_MAIN_QUAT_SEP = " · "
+_MOTION_VALUE_POS_COLOR = "#16a34a"
+_MOTION_VALUE_NEG_COLOR = "#dc2626"
+_MOTION_VALUE_ZERO_COLOR = "#6b7280"
+_MOTION_QUAT_PLACEHOLDER_COLOR = "#9ca3af"
+
+
+def _signed_value_color(value: float) -> str:
+    """Green / red / gray for positive / negative / zero (used for live numeric readouts)."""
+    if value > 0.0:
+        return _MOTION_VALUE_POS_COLOR
+    if value < 0.0:
+        return _MOTION_VALUE_NEG_COLOR
+    return _MOTION_VALUE_ZERO_COLOR
+
+
 _CROSS = "#6b7280"
 _DOT = "#14b8a6"
 _DOT_BORDER = "#64748b"
@@ -175,8 +193,8 @@ class EmotivBridgeApp(toga.App):
         self.status_label: Optional[toga.Label] = None
         # Last Cortex / connection line (not keyboard hints) so we can restore after Settings clears widgets.
         self._last_cortex_status: str = "Connecting..."
-        self.xy_label: Optional[toga.Label] = None
-        self.quat_labels: Optional[list[toga.Label]] = None
+        self.main_motion_readout: Optional[toga.Box] = None
+        self._motion_readout_value_labels: list[toga.Label] = []
         self.keyboard_label: Optional[toga.Label] = None
         self.calibration_instruction_label: Optional[toga.Label] = None
         self.timer_label: Optional[toga.Label] = None
@@ -397,8 +415,8 @@ class EmotivBridgeApp(toga.App):
         self.calibration_xy_label = None
         self.review_xy_label = None
         self.review_neutral_label = None
-        self.xy_label = None
-        self.quat_labels = None
+        self.main_motion_readout = None
+        self._motion_readout_value_labels = []
         self.status_label = None
         self.error_label = None
         self.retry_button = None
@@ -586,6 +604,78 @@ class EmotivBridgeApp(toga.App):
         self.create_movement_pad(pad_host)
         return visual_row
 
+    def _build_main_motion_readout(self, lx: str, ly: str) -> toga.Box:
+        """Row of labels so pitch/roll and each quaternion can use its own color."""
+        self._motion_readout_value_labels = []
+        pack_muted = Pack(font_size=12, color="#6b7280")
+
+        row = toga.Box(
+            style=Pack(
+                direction=ROW,
+                padding_top=6,
+                padding_left=10,
+                padding_right=10,
+                alignment=TOP,
+            ),
+        )
+
+        def add_muted(t: str) -> None:
+            row.add(toga.Label(t, style=pack_muted))
+
+        def add_deg_value(initial: str, *, sample: float) -> None:
+            lab = toga.Label(
+                initial,
+                style=Pack(
+                    font_size=12,
+                    font_weight="bold",
+                    color=_signed_value_color(sample),
+                ),
+            )
+            row.add(lab)
+            self._motion_readout_value_labels.append(lab)
+
+        add_muted(f"{lx}=")
+        add_deg_value("0.00", sample=0.0)
+        add_muted("°· ")
+        add_muted(f"{ly}=")
+        add_deg_value("0.00", sample=0.0)
+        add_muted("°")
+
+        for i in range(4):
+            add_muted(_MAIN_QUAT_SEP)
+            lab = toga.Label(
+                f"Q{i}=—",
+                style=Pack(
+                    font_size=12,
+                    font_weight="bold",
+                    color=_MOTION_QUAT_PLACEHOLDER_COLOR,
+                ),
+            )
+            row.add(lab)
+            self._motion_readout_value_labels.append(lab)
+
+        return row
+
+    def _sync_main_motion_readout(self) -> None:
+        labels = self._motion_readout_value_labels
+        if len(labels) != 6:
+            return
+        cx, cy = self.current_x, self.current_y
+        labels[0].text = f"{cx:.2f}"
+        labels[0].style.update(color=_signed_value_color(cx))
+        labels[1].text = f"{cy:.2f}"
+        labels[1].style.update(color=_signed_value_color(cy))
+        q = self._last_quat
+        for j in range(4):
+            lab = labels[2 + j]
+            if q is not None:
+                v = q[j]
+                lab.text = f"Q{j}={v:.4f}"
+                lab.style.update(color=_signed_value_color(v))
+            else:
+                lab.text = f"Q{j}=—"
+                lab.style.update(color=_MOTION_QUAT_PLACEHOLDER_COLOR)
+
     def show_main_view(self, widget: Optional[toga.Widget] = None) -> None:
         self.current_view = "main"
         self.calibration_active = False
@@ -633,32 +723,8 @@ class EmotivBridgeApp(toga.App):
         err_box.add(self.retry_button)
 
         lx, ly = _motion_axis_labels(self.config_data)
-        tilt_row = toga.Box(
-            style=Pack(
-                direction=ROW,
-                padding_top=6,
-                padding_left=10,
-                padding_right=10,
-                alignment=TOP,
-            )
-        )
-        err_box.add(tilt_row)
-        self.xy_label = toga.Label(
-            f"{lx}=0.00° · {ly}=0.00°",
-            style=Pack(font_size=12, flex=1),
-        )
-        tilt_row.add(self.xy_label)
-        quat_col = toga.Box(style=Pack(direction=COLUMN, padding_left=8))
-        tilt_row.add(quat_col)
-        _quat_placeholder = "—"
-        self.quat_labels = []
-        for qi in range(4):
-            lab = toga.Label(
-                f"Q{qi} {_quat_placeholder}",
-                style=Pack(font_size=10, color="#6b7280", text_align=RIGHT),
-            )
-            quat_col.add(lab)
-            self.quat_labels.append(lab)
+        self.main_motion_readout = self._build_main_motion_readout(lx, ly)
+        err_box.add(self.main_motion_readout)
 
         body = toga.Box(style=Pack(direction=COLUMN, flex=1))
         ph.add(body)
@@ -1324,19 +1390,10 @@ class EmotivBridgeApp(toga.App):
 
         tx, ty = _motion_axis_labels(self.config_data)
         xy_text = f"{tx}={self.current_x:.2f}° · {ty}={self.current_y:.2f}°"
-        if self.xy_label is not None:
-            self.xy_label.text = xy_text
+        if self.main_motion_readout is not None:
+            self._sync_main_motion_readout()
         if self.review_xy_label is not None:
             self.review_xy_label.text = xy_text
-
-        if self.quat_labels:
-            q = self._last_quat
-            if q is not None:
-                for i, lab in enumerate(self.quat_labels):
-                    lab.text = f"Q{i} {q[i]:.5f}"
-            else:
-                for i, lab in enumerate(self.quat_labels):
-                    lab.text = f"Q{i} —"
 
         if self.keyboard_label is not None:
             self.keyboard_label.text = (
