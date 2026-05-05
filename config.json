@@ -13,6 +13,7 @@
   "keyboard_com_enabled": false,
   "invert_pitch": false,
   "invert_roll": false,
+  "swap_pitch_roll_axes": true,
   "debug_mode": false,
   "com_power_threshold": 0.25,
   "key_bindings": {

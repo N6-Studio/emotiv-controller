@@ -4,6 +4,22 @@
 
 A small window shows what the app thinks you are doing (forward, back, left, right). The on-screen text is **Italian**; you do not need to change anything for that.
 
+## Glossary (one-line blocks)
+
+**Motion reticle** — Main canvas: fixed center cross, aim square frame, optional threshold tint bands, and the live head-tilt position marker (teal square); speech shorthand: *reticle*; legacy/doc synonym: *crosshair*.
+
+**Movement pad** — Four directional tiles (forward, left, backward, right) that highlight when that movement is active; speech shorthand: *pad*; code already uses `create_movement_pad` / D-pad comments.
+
+**Synonyms (optional one-liners)**
+
+**Tilt reticle** — Same widget as motion reticle when you want to stress Cortex `mot` / pitch–roll rather than abstract “movement.”
+
+**Direction pad** — Same as movement pad; slightly more generic label.
+
+**Aim HUD** — Informal short label for the motion reticle; less precise than *reticle.*
+
+**Note:** Pad highlighting follows **active movement** (tilt / mental-command mapping), not the user’s physical keyboard key events; simulated key output is separate.
+
 ---
 
 ## What you need

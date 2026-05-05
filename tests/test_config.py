@@ -25,6 +25,7 @@ def test_appconfig_invert_axes_default_off():
     cfg = AppConfig()
     assert cfg.invert_pitch is False
     assert cfg.invert_roll is False
+    assert cfg.swap_pitch_roll_axes is True
 
 
 def test_load_save_invert_axes_round_trip(monkeypatch, tmp_path):
@@ -32,18 +33,24 @@ def test_load_save_invert_axes_round_trip(monkeypatch, tmp_path):
 
     path = tmp_path / "config.json"
     monkeypatch.setattr(app_module, "CONFIG_PATH", path)
-    original = app_module.AppConfig(invert_pitch=True, invert_roll=True)
+    original = app_module.AppConfig(
+        invert_pitch=True,
+        invert_roll=True,
+        swap_pitch_roll_axes=False,
+    )
     app_module.save_config(original)
     loaded = app_module.load_config()
     assert loaded.invert_pitch is True
     assert loaded.invert_roll is True
+    assert loaded.swap_pitch_roll_axes is False
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["invert_pitch"] is True
     assert raw["invert_roll"] is True
+    assert raw["swap_pitch_roll_axes"] is False
 
 
 def test_minimal_config_without_invert_keys_gets_them_on_save(monkeypatch, tmp_path):
-    """Older config files omitting invert_* still round-trip with keys after save."""
+    """Older config files omitting invert_* / swap_* still round-trip with keys after save."""
     import app as app_module
 
     path = tmp_path / "config.json"
@@ -52,12 +59,15 @@ def test_minimal_config_without_invert_keys_gets_them_on_save(monkeypatch, tmp_p
     cfg = app_module.load_config()
     assert cfg.invert_pitch is False
     assert cfg.invert_roll is False
+    assert cfg.swap_pitch_roll_axes is True
     app_module.save_config(cfg)
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert "invert_pitch" in raw
     assert "invert_roll" in raw
+    assert "swap_pitch_roll_axes" in raw
     assert raw["invert_pitch"] is False
     assert raw["invert_roll"] is False
+    assert raw["swap_pitch_roll_axes"] is True
 
 
 def test_load_save_round_trip(monkeypatch, tmp_path):
@@ -79,9 +89,11 @@ def test_load_save_round_trip(monkeypatch, tmp_path):
     assert loaded.keyboard_enabled is True
     assert loaded.threshold_global is False
     assert loaded.debug_mode is True
+    assert loaded.swap_pitch_roll_axes is True
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["neutral_x"] == 1.5
     assert raw["debug_mode"] is True
+    assert raw["swap_pitch_roll_axes"] is True
 
 
 def test_load_config_corrupt_json(monkeypatch, tmp_path):

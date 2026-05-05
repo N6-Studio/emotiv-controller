@@ -25,6 +25,7 @@ from toga.style.pack import CENTER, COLUMN, HIDDEN, NONE, RIGHT, ROW, TOP, VISIB
 
 from bridge_core import (
     APP_ENV_UI_KEYS,
+    AppConfig,
     COM_MAPPED_MENTAL_ACTIONS,
     CONFIG_PATH,
     CortexClient,
@@ -46,8 +47,15 @@ from bridge_core import (
 from core import compute_motion_movements, mot_to_tilt_xy, resolved_movement_thresholds
 from update_service import semver_less
 
-# Live motion readout axis labels — quaternion pitch (forward/back) and roll (left/right).
+# Live motion readout axis labels when swap_pitch_roll_axes is False (pitch→X, roll→Y).
 _TILT_AXIS_LABELS: tuple[str, str] = ("pitch", "roll")
+
+
+def _motion_axis_labels(cfg: AppConfig) -> tuple[str, str]:
+    """Axis names for (current_x, current_y) given swap_pitch_roll_axes."""
+    if cfg.swap_pitch_roll_axes:
+        return ("roll", "pitch")
+    return _TILT_AXIS_LABELS
 
 _CROSS = "#6b7280"
 _DOT = "#14b8a6"
@@ -614,7 +622,7 @@ class EmotivBridgeApp(toga.App):
         )
         err_box.add(self.retry_button)
 
-        lx, ly = _TILT_AXIS_LABELS
+        lx, ly = _motion_axis_labels(self.config_data)
         self.xy_label = toga.Label(
             f"{lx}=0.00° · {ly}=0.00°",
             style=Pack(padding_top=6, padding_left=10, padding_right=10, font_size=12),
@@ -749,7 +757,7 @@ class EmotivBridgeApp(toga.App):
         )
         cal_content.add(self.timer_label)
 
-        ax, ay = _TILT_AXIS_LABELS
+        ax, ay = _motion_axis_labels(self.config_data)
         self.calibration_xy_label = toga.Label(
             f"avg {ax}=0.00° · avg {ay}=0.00°",
             style=Pack(color="#4b5563", font_size=14, padding_bottom=8, text_align=CENTER),
@@ -797,7 +805,7 @@ class EmotivBridgeApp(toga.App):
                 style=Pack(font_size=20, font_weight="bold", padding_bottom=8, text_align=CENTER),
             )
         )
-        rx, ry = _TILT_AXIS_LABELS
+        rx, ry = _motion_axis_labels(self.config_data)
         self.review_xy_label = toga.Label(
             f"{rx}=0.00° · {ry}=0.00°",
             style=Pack(padding_bottom=6, font_size=14, text_align=CENTER),
@@ -917,6 +925,11 @@ class EmotivBridgeApp(toga.App):
             value=self.config_data.invert_roll,
         )
         form.add(invert_roll_sw)
+        swap_axes_sw = toga.Switch(
+            "Swap pitch and roll on movement axes (pitch ↔ roll for forward/back vs left/right)",
+            value=self.config_data.swap_pitch_roll_axes,
+        )
+        form.add(swap_axes_sw)
         form.add(
             toga.Label(
                 "Applies to head tilt after calibration; recalibrate neutral if directions feel wrong.",
@@ -1009,6 +1022,7 @@ class EmotivBridgeApp(toga.App):
             self.config_data.debug_mode = bool(debug_sw.value)
             self.config_data.invert_pitch = bool(invert_pitch_sw.value)
             self.config_data.invert_roll = bool(invert_roll_sw.value)
+            self.config_data.swap_pitch_roll_axes = bool(swap_axes_sw.value)
             self.config_data.threshold_global = bool(tg_sw.value)
             self.config_data.threshold = float(thr_global.value)
             for m, inp in per_inputs.items():
@@ -1121,8 +1135,14 @@ class EmotivBridgeApp(toga.App):
                 mot_cols = self.cortex.mot_cols if self.cortex is not None else None
                 px, py = mot_to_tilt_xy(mot, mot_cols)
                 cfg = self.config_data
-                self.current_x = -px if cfg.invert_pitch else px
-                self.current_y = -py if cfg.invert_roll else py
+                pitch_val = -px if cfg.invert_pitch else px
+                roll_val = -py if cfg.invert_roll else py
+                if cfg.swap_pitch_roll_axes:
+                    self.current_x = roll_val
+                    self.current_y = pitch_val
+                else:
+                    self.current_x = pitch_val
+                    self.current_y = roll_val
                 motion_detected.update(self.map_motion(self.current_x, self.current_y))
 
         if isinstance(msg.get("com"), list):
@@ -1261,7 +1281,7 @@ class EmotivBridgeApp(toga.App):
         self.draw_crosshair()
         self._sync_movement_pad_cell_layout()
 
-        tx, ty = _TILT_AXIS_LABELS
+        tx, ty = _motion_axis_labels(self.config_data)
         xy_text = f"{tx}={self.current_x:.2f}° · {ty}={self.current_y:.2f}°"
         if self.xy_label is not None:
             self.xy_label.text = xy_text
@@ -1308,7 +1328,7 @@ class EmotivBridgeApp(toga.App):
             if self.calibration_samples and self.calibration_xy_label is not None:
                 avg_x = sum(x for x, _ in self.calibration_samples) / len(self.calibration_samples)
                 avg_y = sum(y for _, y in self.calibration_samples) / len(self.calibration_samples)
-                axn, ayn = _TILT_AXIS_LABELS
+                axn, ayn = _motion_axis_labels(self.config_data)
                 self.calibration_xy_label.text = (
                     f"avg {axn}={avg_x:.2f}° · avg {ayn}={avg_y:.2f}°"
                 )

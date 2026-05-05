@@ -123,6 +123,8 @@ class AppConfig:
     # Negate quaternion-derived pitch / roll before thresholds and calibration (default off).
     invert_pitch: bool = False
     invert_roll: bool = False
+    # If True, roll feeds motion X (forward/back) and pitch feeds Y (left/right); if False, pitch→X and roll→Y.
+    swap_pitch_roll_axes: bool = True
     debug_mode: bool = False
     com_power_threshold: float = DEFAULT_COM_POWER_THRESHOLD
     key_bindings: dict = None
@@ -191,9 +193,10 @@ def load_config() -> AppConfig:
 def save_config(config: AppConfig):
     """Write ``config`` to disk as JSON (full ``AppConfig`` snapshot via ``asdict``).
 
-    Every field on ``AppConfig`` is persisted, including ``invert_pitch`` and
-    ``invert_roll``, so any code path that calls this (settings, calibration,
-    keyboard shortcut toggle, env form) keeps those flags in ``config.json``.
+    Every field on ``AppConfig`` is persisted, including ``invert_pitch``,
+    ``invert_roll``, and ``swap_pitch_roll_axes``, so any code path that calls
+    this (settings, calibration, keyboard shortcut toggle, env form) keeps
+    those flags in ``config.json``.
     """
     path = _config_path()
     path.write_text(
