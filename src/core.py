@@ -71,6 +71,55 @@ def quaternion_to_pitch_roll(
     return pitch, roll
 
 
+# Degrees: ranges implied by :func:`quaternion_to_pitch_roll` (``asin`` / ``atan2``).
+TILT_PITCH_MIN_DEG = -90.0
+TILT_PITCH_MAX_DEG = 90.0
+TILT_ROLL_MIN_DEG = -180.0
+TILT_ROLL_MAX_DEG = 180.0
+
+
+def reticle_offset_deg_to_normalized(
+    dx_pitch_deg: float,
+    dy_roll_deg: float,
+    neutral_pitch_deg: float,
+    neutral_roll_deg: float,
+) -> tuple[float, float]:
+    """Map pitch/roll **offsets from neutral** (degrees) to reticle coordinates in ``[-1, 1]``.
+
+    ``(0, 0)`` is always the calibrated neutral. ``±1`` on an axis is the global
+    quaternion-derived limit in that direction: pitch toward ``TILT_PITCH_*`` and
+    roll toward ``TILT_ROLL_*``. Uses separate spans for negative vs positive delta
+    so the aim box uses the full physically reachable range from the current neutral.
+    """
+    if dx_pitch_deg <= 0.0:
+        span_neg = neutral_pitch_deg - TILT_PITCH_MIN_DEG
+        if span_neg <= 1e-15:
+            hx = 0.0
+        else:
+            hx = max(-1.0, dx_pitch_deg / span_neg)
+    else:
+        span_pos = TILT_PITCH_MAX_DEG - neutral_pitch_deg
+        if span_pos <= 1e-15:
+            hx = 0.0
+        else:
+            hx = min(1.0, dx_pitch_deg / span_pos)
+
+    if dy_roll_deg <= 0.0:
+        span_neg = neutral_roll_deg - TILT_ROLL_MIN_DEG
+        if span_neg <= 1e-15:
+            hy = 0.0
+        else:
+            hy = max(-1.0, dy_roll_deg / span_neg)
+    else:
+        span_pos = TILT_ROLL_MAX_DEG - neutral_roll_deg
+        if span_pos <= 1e-15:
+            hy = 0.0
+        else:
+            hy = min(1.0, dy_roll_deg / span_pos)
+
+    return hx, hy
+
+
 def _quat_tuple_from_mot(mot: list[Any], cols: list[str]) -> tuple[float, float, float, float] | None:
     """Raw ``(Q0, Q1, Q2, Q3)`` from ``mot`` when ``cols`` names quaternion slots; else ``None``."""
     if len(cols) != len(mot):

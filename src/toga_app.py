@@ -49,6 +49,7 @@ from core import (
     mot_quaternion,
     mot_to_tilt_xy,
     resolved_movement_thresholds,
+    reticle_offset_deg_to_normalized,
 )
 from update_service import semver_less
 
@@ -1247,18 +1248,22 @@ class EmotivBridgeApp(toga.App):
         neutral_x = self.get_active_neutral_x()
         neutral_y = self.get_active_neutral_y()
 
+        aim_half = sq * _AIM_BOX_FRACTION
+        side_len = 2.0 * aim_half
+
         if neutral_x is None or neutral_y is None:
             dx = 0.0
             dy = 0.0
+            hx = 0.0
+            hy = 0.0
         else:
-            dx = self.current_y - float(neutral_y)
-            dy = self.current_x - float(neutral_x)
+            nx, ny = float(neutral_x), float(neutral_y)
+            dx = self.current_y - ny
+            dy = self.current_x - nx
+            hx, hy = reticle_offset_deg_to_normalized(dx, dy, ny, nx)
 
-        scale = 7.0
-        aim_half = sq * _AIM_BOX_FRACTION
-        side_len = 2.0 * aim_half
-        px = cx + max(-aim_half, min(aim_half, dx * scale))
-        py = cy + max(-aim_half, min(aim_half, dy * scale))
+        px = cx + max(-aim_half, min(aim_half, hx * aim_half))
+        py = cy + max(-aim_half, min(aim_half, hy * aim_half))
 
         ctx = self.cross_canvas.context
         ctx.clear()
@@ -1269,22 +1274,27 @@ class EmotivBridgeApp(toga.App):
                 threshold=float(self.config_data.threshold),
                 movement_thresholds=self.config_data.movement_thresholds,
             )
+            nx, ny = float(neutral_x), float(neutral_y)
             left, top = cx - aim_half, cy - aim_half
             right, bottom = cx + aim_half, cy + aim_half
+            _, hy_fwd = reticle_offset_deg_to_normalized(0.0, -t_fwd, ny, nx)
+            _, hy_back = reticle_offset_deg_to_normalized(0.0, t_back, ny, nx)
+            hx_left, _ = reticle_offset_deg_to_normalized(-t_left, 0.0, ny, nx)
+            hx_right, _ = reticle_offset_deg_to_normalized(t_right, 0.0, ny, nx)
             with ctx.Fill(color=_AIM_ACTIVATION_FILL) as band:
-                y1 = cy - t_fwd * scale
+                y1 = cy + hy_fwd * aim_half
                 h_top = y1 - top
                 if h_top > 0:
                     band.rect(left, top, right - left, h_top)
-                y0 = cy + t_back * scale
+                y0 = cy + hy_back * aim_half
                 h_bot = bottom - y0
                 if h_bot > 0:
                     band.rect(left, y0, right - left, h_bot)
-                x1 = cx - t_left * scale
+                x1 = cx + hx_left * aim_half
                 w_left = x1 - left
                 if w_left > 0:
                     band.rect(left, top, w_left, bottom - top)
-                x0 = cx + t_right * scale
+                x0 = cx + hx_right * aim_half
                 w_right = right - x0
                 if w_right > 0:
                     band.rect(x0, top, w_right, bottom - top)
