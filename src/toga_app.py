@@ -1313,8 +1313,9 @@ class EmotivBridgeApp(toga.App):
             dy_acc_z = self.current_y - ny
             hx, hy = reticle_offset_acc_to_normalized(dx_acc_y, dy_acc_z, nx, ny)
 
-        px = cx + max(-aim_half, min(aim_half, hx * aim_half))
-        py = cy + max(-aim_half, min(aim_half, hy * aim_half))
+        # Map ACC Y (forward/back) to **vertical** (forward = up); ACC Z (left/right) to **horizontal**.
+        px = cx + max(-aim_half, min(aim_half, hy * aim_half))
+        py = cy + max(-aim_half, min(aim_half, hx * aim_half))
 
         ctx = self.cross_canvas.context
         ctx.clear()
@@ -1328,24 +1329,24 @@ class EmotivBridgeApp(toga.App):
             nx, ny = float(neutral_x), float(neutral_y)
             left, top = cx - aim_half, cy - aim_half
             right, bottom = cx + aim_half, cy + aim_half
-            hx_fwd, _ = reticle_offset_acc_to_normalized(-t_fwd, 0.0, nx, ny)
-            hx_back, _ = reticle_offset_acc_to_normalized(t_back, 0.0, nx, ny)
-            _, hy_left = reticle_offset_acc_to_normalized(0.0, -t_left, nx, ny)
-            _, hy_right = reticle_offset_acc_to_normalized(0.0, t_right, nx, ny)
+            hy_fwd, _ = reticle_offset_acc_to_normalized(-t_fwd, 0.0, nx, ny)
+            hy_back, _ = reticle_offset_acc_to_normalized(t_back, 0.0, nx, ny)
+            _, hx_left = reticle_offset_acc_to_normalized(0.0, -t_left, nx, ny)
+            _, hx_right = reticle_offset_acc_to_normalized(0.0, t_right, nx, ny)
             with ctx.Fill(color=_AIM_ACTIVATION_FILL) as band:
-                x1 = cx + hx_fwd * aim_half
+                x1 = cx + hx_left * aim_half
                 w_left = x1 - left
                 if w_left > 0:
                     band.rect(left, top, w_left, bottom - top)
-                x0 = cx + hx_back * aim_half
+                x0 = cx + hx_right * aim_half
                 w_right = right - x0
                 if w_right > 0:
                     band.rect(x0, top, w_right, bottom - top)
-                y1 = cy + hy_left * aim_half
+                y1 = cy + hy_fwd * aim_half
                 h_top = y1 - top
                 if h_top > 0:
                     band.rect(left, top, right - left, h_top)
-                y0 = cy + hy_right * aim_half
+                y0 = cy + hy_back * aim_half
                 h_bot = bottom - y0
                 if h_bot > 0:
                     band.rect(left, y0, right - left, h_bot)
