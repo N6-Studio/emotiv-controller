@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import os
 import sys
 import threading
@@ -118,6 +119,23 @@ def _paint_com_key_badge(canvas: toga.Canvas, text: str, *, muted: bool) -> None
         )
 
 
+@dataclass
+class MainViewRefs:
+    """Widget handles for the main screen only (cleared when switching views)."""
+
+    error_label: Optional[toga.Label] = None
+    status_label: Optional[toga.Label] = None
+    keyboard_label: Optional[toga.Label] = None
+    retry_button: Optional[toga.Button] = None
+    connection_activity: Optional[toga.ActivityIndicator] = None
+    main_motion_readout: Optional[toga.Box] = None
+    motion_readout_value_labels: list[toga.Label] = field(default_factory=list)
+    com_power_labels: Optional[dict[str, toga.Label]] = None
+    com_power_bars: Optional[dict[str, toga.ProgressBar]] = None
+    com_key_badges: Optional[dict[str, toga.Canvas]] = None
+    com_threshold_hint: Optional[toga.Label] = None
+
+
 def _action_btn_style(*, gap_after: bool = False) -> Pack:
     """Larger primary actions; use gap_after on buttons that have another button to their right."""
     return Pack(
@@ -189,13 +207,9 @@ class EmotivBridgeApp(toga.App):
         self._movement_pad_square_labels: list[toga.Label] = []
         self._movement_pad_cell_size: int = 0
         self.com_powers = {a: 0.0 for a in COM_MAPPED_MENTAL_ACTIONS}
-        self.com_power_labels: Optional[dict[str, toga.Label]] = None
-        self.com_key_badges: Optional[dict[str, toga.Canvas]] = None
         self._com_key_badge_display: dict[str, str] = {}
-        self.com_threshold_hint: Optional[toga.Label] = None
 
         self.connection_failed = False
-        self.retry_button: Optional[toga.Button] = None
         self._update_check_in_progress = False
 
         self.cortex: Optional[CortexClient] = None
@@ -208,15 +222,11 @@ class EmotivBridgeApp(toga.App):
         self.cross_canvas: Optional[toga.Canvas] = None
         self.panel_host: Optional[toga.Box] = None
 
-        self.error_label: Optional[toga.Label] = None
-        self.status_label: Optional[toga.Label] = None
         # Last Cortex / connection line (not keyboard hints) so we can restore after Settings clears widgets.
         self._last_cortex_status: str = "Connecting..."
-        self.main_motion_readout: Optional[toga.Box] = None
-        self._motion_readout_value_labels: list[toga.Label] = []
+        self._main_view: Optional[MainViewRefs] = None
         self.calibration_live_readout: Optional[toga.Box] = None
         self._calibration_motion_value_labels: list[toga.Label] = []
-        self.keyboard_label: Optional[toga.Label] = None
         self.calibration_instruction_label: Optional[toga.Label] = None
         self.calibration_start_button: Optional[toga.Button] = None
         self.timer_label: Optional[toga.Label] = None
@@ -438,21 +448,13 @@ class EmotivBridgeApp(toga.App):
         self.calibration_xy_label = None
         self.review_xy_label = None
         self.review_neutral_label = None
-        self.main_motion_readout = None
-        self._motion_readout_value_labels = []
         self.calibration_live_readout = None
         self._calibration_motion_value_labels = []
-        self.status_label = None
-        self.error_label = None
-        self.retry_button = None
-        self.keyboard_label = None
+        self._main_view = None
         self.movement_buttons = {}
         self._movement_pad_square_labels = []
         self._movement_pad_cell_size = 0
-        self.com_power_labels = None
-        self.com_key_badges = None
         self._com_key_badge_display.clear()
-        self.com_threshold_hint = None
 
     def _restart_cortex_client(self, *, clear_error_ui: bool, status_message: str) -> None:
         if self.cortex is not None:
@@ -463,10 +465,12 @@ class EmotivBridgeApp(toga.App):
 
         if clear_error_ui:
             self.connection_failed = False
-            if self.retry_button is not None:
-                self.retry_button.style.visibility = HIDDEN
-            if self.error_label is not None:
-                self.error_label.text = ""
+            mv = self._main_view
+            if mv is not None:
+                if mv.retry_button is not None:
+                    mv.retry_button.style.visibility = HIDDEN
+                if mv.error_label is not None:
+                    mv.error_label.text = ""
 
         self.cortex = CortexClient(
             on_stream=lambda msg: self.stream_queue.put(msg),
@@ -677,39 +681,46 @@ class EmotivBridgeApp(toga.App):
             lab.text = f"{val:.4f}"
             lab.style.update(color=_signed_value_color(val))
 
-    def show_main_view(self, widget: Optional[toga.Widget] = None) -> None:
-        self.current_view = "main"
-        self.calibration_active = False
-        self._clear_panel_host()
-        assert self.panel_host is not None
-        ph = self.panel_host
-        self.com_powers = {a: 0.0 for a in COM_MAPPED_MENTAL_ACTIONS}
-        self.com_pad_movements = set()
+    def _sync_main_connection_activity(self, status: str) -> None:
+        mv = self._main_view
+        if mv is None or mv.connection_activity is None:
+            return
+        low = status.lower()
+        busy = "connecting" in low or "reconnecting" in low
+        ai = mv.connection_activity
+        if busy:
+            ai.start()
+        else:
+            ai.stop()
 
+    def _build_main_status_strip(self, refs: MainViewRefs) -> toga.Box:
         err_box = toga.Box(style=Pack(direction=COLUMN, padding_bottom=8))
-        ph.add(err_box)
-
-        self.error_label = toga.Label("", style=Pack(color="#b91c1c"))
-        err_box.add(self.error_label)
+        refs.error_label = toga.Label("", style=Pack(color="#b91c1c"))
+        err_box.add(refs.error_label)
 
         top = toga.Box(style=Pack(direction=ROW, padding_left=10, padding_right=10, padding_top=10, alignment=TOP))
         err_box.add(top)
 
-        info_left = toga.Box(style=Pack(direction=COLUMN, flex=1))
+        info_left = toga.Box(style=Pack(direction=ROW, flex=1, alignment=CENTER))
         top.add(info_left)
-        self.status_label = toga.Label(
-            self._last_cortex_status,
-            style=Pack(color="#6b7280", font_size=11),
-        )
-        info_left.add(self.status_label)
+        # WinForms backend does not implement ActivityIndicator.
+        if sys.platform != "win32":
+            refs.connection_activity = toga.ActivityIndicator(style=Pack(width=22, height=22, padding_right=8))
+            info_left.add(refs.connection_activity)
 
-        self.keyboard_label = toga.Label(
+        refs.status_label = toga.Label(
+            self._last_cortex_status,
+            style=Pack(color="#6b7280", font_size=11, flex=1),
+        )
+        info_left.add(refs.status_label)
+
+        refs.keyboard_label = toga.Label(
             "",
             style=Pack(color="#6b7280", font_size=11, text_align=RIGHT),
         )
-        top.add(self.keyboard_label)
+        top.add(refs.keyboard_label)
 
-        self.retry_button = toga.Button(
+        refs.retry_button = toga.Button(
             "Retry connection",
             on_press=self.retry_connection,
             style=Pack(
@@ -720,17 +731,13 @@ class EmotivBridgeApp(toga.App):
                 visibility=HIDDEN if not self.connection_failed else VISIBLE,
             ),
         )
-        err_box.add(self.retry_button)
+        err_box.add(refs.retry_button)
 
-        self.main_motion_readout, self._motion_readout_value_labels = self._build_live_motion_readout_row()
-        err_box.add(self.main_motion_readout)
+        refs.main_motion_readout, refs.motion_readout_value_labels = self._build_live_motion_readout_row()
+        err_box.add(refs.main_motion_readout)
+        return err_box
 
-        body = toga.Box(style=Pack(direction=COLUMN, flex=1))
-        ph.add(body)
-
-        # Most extra vertical space goes here so the crosshair and D-pad grow and COM sits below.
-        body.add(self._build_crosshair_pad_row(flex=8))
-
+    def _build_com_power_section(self, refs: MainViewRefs) -> toga.Box:
         com_box = toga.Box(
             style=Pack(
                 direction=COLUMN,
@@ -740,30 +747,31 @@ class EmotivBridgeApp(toga.App):
                 padding_bottom=4,
             )
         )
-        body.add(com_box)
-
         com_header = toga.Box(style=Pack(direction=ROW, alignment=TOP, padding_bottom=6))
         com_box.add(com_header)
         com_header.add(
             toga.Label("COM power", style=Pack(font_weight="bold", color="#6b7280")),
         )
         com_header.add(toga.Box(style=Pack(flex=1)))
-        self.com_threshold_hint = toga.Label(
+        refs.com_threshold_hint = toga.Label(
             "",
             style=Pack(font_size=10, color="#9ca3af", text_align=RIGHT),
         )
-        com_header.add(self.com_threshold_hint)
+        com_header.add(refs.com_threshold_hint)
 
         powers_row = toga.Box(style=Pack(direction=ROW, alignment=CENTER))
         com_box.add(powers_row)
-        self.com_power_labels = {}
-        self.com_key_badges = {}
+        refs.com_power_labels = {}
+        refs.com_key_badges = {}
+        refs.com_power_bars = {}
         self._com_key_badge_display.clear()
         n_cmds = len(COM_MAPPED_MENTAL_ACTIONS)
         for idx, cmd in enumerate(COM_MAPPED_MENTAL_ACTIONS):
-            col = toga.Box(style=Pack(direction=ROW, flex=1, alignment=CENTER))
+            col = toga.Box(style=Pack(direction=COLUMN, flex=1, alignment=CENTER))
             powers_row.add(col)
-            col.add(
+            row_top = toga.Box(style=Pack(direction=ROW, alignment=CENTER))
+            col.add(row_top)
+            row_top.add(
                 toga.Label(
                     cmd,
                     style=Pack(font_size=10, color="#9ca3af", padding_right=6),
@@ -775,8 +783,8 @@ class EmotivBridgeApp(toga.App):
                     height=_COM_KEY_BADGE_CANVAS_H,
                 ),
             )
-            col.add(chip)
-            self.com_key_badges[cmd] = chip
+            row_top.add(chip)
+            refs.com_key_badges[cmd] = chip
             bound_key = str(self.config_data.com_key_bindings.get(cmd, "")).strip()
             if bound_key:
                 chip.style.visibility = VISIBLE
@@ -784,7 +792,7 @@ class EmotivBridgeApp(toga.App):
                 _paint_com_key_badge(chip, bound_key, muted=False)
             else:
                 chip.style.visibility = HIDDEN
-            col.add(toga.Box(style=Pack(flex=1)))
+            row_top.add(toga.Box(style=Pack(flex=1)))
             vl = toga.Label(
                 "0.00",
                 style=Pack(
@@ -793,23 +801,48 @@ class EmotivBridgeApp(toga.App):
                     padding_right=4,
                 ),
             )
-            col.add(vl)
-            self.com_power_labels[cmd] = vl
+            row_top.add(vl)
+            refs.com_power_labels[cmd] = vl
+
+            bar = toga.ProgressBar(
+                max=1.0,
+                value=0.0,
+                style=Pack(padding_top=4, padding_left=2, padding_right=2, width=80),
+            )
+            col.add(bar)
+            refs.com_power_bars[cmd] = bar
 
             if idx < n_cmds - 1:
                 powers_row.add(
-                    toga.Label(
-                        "|",
-                        style=Pack(
-                            font_size=11,
-                            color="#cbd5e1",
-                            padding_left=4,
-                            padding_right=4,
-                        ),
+                    toga.Divider(
+                        direction=toga.Divider.VERTICAL,
+                        style=Pack(padding_left=4, padding_right=4, height=52),
                     )
                 )
+        return com_box
 
+    def _build_main_body(self, refs: MainViewRefs) -> toga.Box:
+        body = toga.Box(style=Pack(direction=COLUMN, flex=1))
+        body.add(self._build_crosshair_pad_row(flex=8))
+        body.add(self._build_com_power_section(refs))
         body.add(toga.Box(style=Pack(flex=1)))
+        return body
+
+    def show_main_view(self, widget: Optional[toga.Widget] = None) -> None:
+        self.current_view = "main"
+        self.calibration_active = False
+        self._clear_panel_host()
+        assert self.panel_host is not None
+        ph = self.panel_host
+        self.com_powers = {a: 0.0 for a in COM_MAPPED_MENTAL_ACTIONS}
+        self.com_pad_movements = set()
+
+        refs = MainViewRefs()
+        ph.add(self._build_main_status_strip(refs))
+        ph.add(toga.Divider(style=Pack(padding_top=4, padding_bottom=8, padding_left=8, padding_right=8)))
+        ph.add(self._build_main_body(refs))
+        self._main_view = refs
+        self._sync_main_connection_activity(self._last_cortex_status)
 
         self._sync_crosshair_visibility()
 
@@ -1482,28 +1515,29 @@ class EmotivBridgeApp(toga.App):
 
         ay_l, az_l = _MOTION_AXIS_YZ
         xy_text = f"{ay_l}={self.current_x:.4f} · {az_l}={self.current_y:.4f}"
-        if self.main_motion_readout is not None:
-            self._sync_live_motion_readout(self._motion_readout_value_labels)
+        mv = self._main_view
+        if mv is not None and mv.main_motion_readout is not None:
+            self._sync_live_motion_readout(mv.motion_readout_value_labels)
         if self.calibration_live_readout is not None:
             self._sync_live_motion_readout(self._calibration_motion_value_labels)
         if self.review_xy_label is not None:
             self.review_xy_label.text = xy_text
 
-        if self.keyboard_label is not None:
-            self.keyboard_label.text = (
+        if mv is not None and mv.keyboard_label is not None:
+            mv.keyboard_label.text = (
                 "Keyboard presses: on"
                 if self.config_data.keyboard_enabled
                 else "Keyboard presses: off"
             )
 
-        if self.current_view == "main" and self.com_power_labels:
+        if self.current_view == "main" and mv is not None and mv.com_power_labels:
             thr = float(self.config_data.com_power_threshold)
-            if self.com_threshold_hint is not None:
-                self.com_threshold_hint.text = f"Activate after ≥ {thr:.2f}"
-            if self.com_key_badges is not None:
+            if mv.com_threshold_hint is not None:
+                mv.com_threshold_hint.text = f"Activate after ≥ {thr:.2f}"
+            if mv.com_key_badges is not None:
                 for cmd in COM_MAPPED_MENTAL_ACTIONS:
                     key = str(self.config_data.com_key_bindings.get(cmd, "")).strip()
-                    chip = self.com_key_badges.get(cmd)
+                    chip = mv.com_key_badges.get(cmd)
                     if chip is None:
                         continue
                     if not key:
@@ -1515,9 +1549,13 @@ class EmotivBridgeApp(toga.App):
                         continue
                     self._com_key_badge_display[cmd] = key
                     _paint_com_key_badge(chip, key, muted=False)
-            for cmd, lab in self.com_power_labels.items():
+            bars = mv.com_power_bars or {}
+            for cmd, lab in mv.com_power_labels.items():
                 p = float(self.com_powers.get(cmd, 0.0))
                 lab.text = f"{p:.2f}"
+                pb = bars.get(cmd)
+                if pb is not None:
+                    pb.value = min(1.0, max(0.0, p))
                 bound = bool(str(self.config_data.com_key_bindings.get(cmd, "")).strip())
                 if not bound:
                     lab.style.color = "#d1d5db"
@@ -1597,26 +1635,31 @@ class EmotivBridgeApp(toga.App):
                     "Keyboard shortcut is "
                 ):
                     self._last_cortex_status = status
-                if self.status_label is not None:
-                    self.status_label.text = status
+                mv = self._main_view
+                if mv is not None and mv.status_label is not None:
+                    mv.status_label.text = status
+                    self._sync_main_connection_activity(status)
                 if _status_clears_connection_error_ui(status):
-                    if self.error_label is not None:
-                        self.error_label.text = ""
                     self.connection_failed = False
-                    if self.retry_button is not None:
-                        self.retry_button.style.visibility = HIDDEN
+                    if mv is not None:
+                        if mv.error_label is not None:
+                            mv.error_label.text = ""
+                        if mv.retry_button is not None:
+                            mv.retry_button.style.visibility = HIDDEN
         except Empty:
             pass
 
         try:
             while True:
                 error = self.error_queue.get_nowait()
-                if self.error_label is not None:
-                    self.error_label.text = error
+                mv = self._main_view
+                if mv is not None:
+                    if mv.error_label is not None:
+                        mv.error_label.text = error
+                    if mv.retry_button is not None:
+                        mv.retry_button.style.visibility = VISIBLE
                 print(error)
                 self.connection_failed = True
-                if self.retry_button is not None:
-                    self.retry_button.style.visibility = VISIBLE
         except Empty:
             pass
 
