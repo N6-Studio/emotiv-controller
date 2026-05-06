@@ -52,6 +52,16 @@ from core import (
 from update_service import semver_less
 
 from queue_utils import drain_queue
+from calibration_ui import (
+    CalibrationReviewViewRefs,
+    CalibrationViewRefs,
+    MOTION_AXIS_YZ,
+    build_calibration_review_action_row,
+    build_calibration_review_content,
+    build_calibration_screen,
+    build_live_motion_readout_row,
+    signed_value_color,
+)
 from settings_ui import (
     build_env_settings_scroll,
     build_general_tab,
@@ -61,33 +71,16 @@ from settings_ui import (
 )
 from ui_theme import (
     pack_action_button,
-    pack_calibration_averages_line,
-    pack_calibration_timer,
     pack_com_header,
     pack_com_hint,
     pack_error,
     pack_muted_body,
     pack_muted_small,
-    pack_review_section_title,
     pack_section_title,
     pack_status_line,
 )
 from ui_views import AppView
 from win32_hotkey import win32_hotkey_thread_main
-
-# ``current_x`` / ``current_y`` are Cortex ACCY / ACCZ (forward-back / left-right); ``current_acc_x`` is ACCX (display).
-_MOTION_AXIS_YZ: tuple[str, str] = ("ACC Y", "ACC Z")
-_MOTION_VALUE_POS_COLOR = "#16a34a"
-_MOTION_VALUE_NEG_COLOR = "#dc2626"
-_MOTION_VALUE_ZERO_COLOR = "#6b7280"
-def _signed_value_color(value: float) -> str:
-    """Green / red / gray for positive / negative / zero (used for live numeric readouts)."""
-    if value > 0.0:
-        return _MOTION_VALUE_POS_COLOR
-    if value < 0.0:
-        return _MOTION_VALUE_NEG_COLOR
-    return _MOTION_VALUE_ZERO_COLOR
-
 
 _CROSS = "#6b7280"
 _DOT = "#14b8a6"
@@ -155,26 +148,6 @@ class MainViewRefs:
     com_power_bars: Optional[dict[str, toga.ProgressBar]] = None
     com_key_badges: Optional[dict[str, toga.Canvas]] = None
     com_threshold_hint: Optional[toga.Label] = None
-
-
-@dataclass
-class CalibrationViewRefs:
-    """Widgets updated live during neutral calibration."""
-
-    instruction_label: toga.Label
-    start_button: toga.Button
-    timer_label: toga.Label
-    live_readout: toga.Box
-    motion_value_labels: list[toga.Label]
-    xy_label: toga.Label
-
-
-@dataclass
-class CalibrationReviewViewRefs:
-    """Calibration verification screen widgets."""
-
-    xy_label: toga.Label
-    neutral_label: toga.Label
 
 
 def _icon() -> Optional[toga.Icon]:
@@ -602,52 +575,13 @@ class EmotivBridgeApp(toga.App):
         self.create_movement_pad(pad_host)
         return visual_row
 
-    def _build_live_motion_readout_row(self) -> tuple[toga.Box, list[toga.Label]]:
-        """ACC X / Y / Z readout (movement uses Y and Z)."""
-        value_labels: list[toga.Label] = []
-        muted_caption = pack_muted_body(font_size=12)
-
-        row = toga.Box(
-            style=Pack(
-                direction=ROW,
-                padding_top=6,
-                padding_left=10,
-                padding_right=10,
-                alignment=TOP,
-            ),
-        )
-
-        def add_muted(t: str) -> None:
-            row.add(toga.Label(t, style=muted_caption))
-
-        def add_acc_value(initial: str, *, sample: float) -> None:
-            lab = toga.Label(
-                initial,
-                style=Pack(
-                    font_size=12,
-                    font_weight="bold",
-                    color=_signed_value_color(sample),
-                ),
-            )
-            row.add(lab)
-            value_labels.append(lab)
-
-        add_muted("ACC X=")
-        add_acc_value("0.00", sample=0.0)
-        add_muted(" · ACC Y=")
-        add_acc_value("0.00", sample=0.0)
-        add_muted(" · ACC Z=")
-        add_acc_value("0.00", sample=0.0)
-
-        return row, value_labels
-
     def _sync_live_motion_readout(self, value_labels: list[toga.Label]) -> None:
         if len(value_labels) != 3:
             return
         ax, ay, az = self.current_acc_x, self.current_x, self.current_y
         for val, lab in zip((ax, ay, az), value_labels, strict=True):
             lab.text = f"{val:.4f}"
-            lab.style.update(color=_signed_value_color(val))
+            lab.style.update(color=signed_value_color(val))
 
     def _sync_main_connection_activity(self, status: str) -> None:
         mv = self._main_view
@@ -715,7 +649,7 @@ class EmotivBridgeApp(toga.App):
         )
         err_box.add(refs.retry_button)
 
-        refs.main_motion_readout, refs.motion_readout_value_labels = self._build_live_motion_readout_row()
+        refs.main_motion_readout, refs.motion_readout_value_labels = build_live_motion_readout_row()
         err_box.add(refs.main_motion_readout)
         return err_box
 
@@ -857,84 +791,6 @@ class EmotivBridgeApp(toga.App):
         if cr is not None:
             cr.start_button.text = "Reset timer"
 
-    def _build_calibration_screen(self, cal_content: toga.Box) -> CalibrationViewRefs:
-        """Assemble calibration-specific widgets (crosshair row is added separately)."""
-        cal_content.add(
-            toga.Label(
-                "Calibration",
-                style=pack_section_title(padding_bottom=4, text_align=CENTER),
-            )
-        )
-        instruction_label = toga.Label(
-            "After you start, hold a comfortable neutral head pose for the full 10 seconds.",
-            style=pack_muted_body(padding_bottom=4, text_align=CENTER),
-        )
-        cal_content.add(instruction_label)
-        cal_content.add(
-            toga.Label(
-                "Neutral is set to the average position recorded during the timer.",
-                style=pack_muted_body(font_size=12, padding_bottom=8, text_align=CENTER),
-            )
-        )
-
-        start_button = toga.Button(
-            "Start 10 s timer",
-            on_press=self._on_calibration_timer_button,
-            style=pack_action_button(),
-        )
-        cal_content.add(start_button)
-
-        timer_label = toga.Label(
-            "—",
-            style=pack_calibration_timer(padding_bottom=6, text_align=CENTER),
-        )
-        cal_content.add(timer_label)
-
-        live_readout, motion_value_labels = self._build_live_motion_readout_row()
-        cal_wrap = toga.Box(
-            style=Pack(direction=ROW, alignment=CENTER, padding_bottom=6),
-        )
-        cal_wrap.add(toga.Box(style=Pack(flex=1)))
-        cal_wrap.add(live_readout)
-        cal_wrap.add(toga.Box(style=Pack(flex=1)))
-        cal_content.add(cal_wrap)
-
-        xy_label = toga.Label(
-            "Averages appear while the timer runs.",
-            style=pack_calibration_averages_line(padding_bottom=8, text_align=CENTER),
-        )
-        cal_content.add(xy_label)
-
-        return CalibrationViewRefs(
-            instruction_label=instruction_label,
-            start_button=start_button,
-            timer_label=timer_label,
-            live_readout=live_readout,
-            motion_value_labels=motion_value_labels,
-            xy_label=xy_label,
-        )
-
-    def _build_calibration_review_screen(self, review_content: toga.Box) -> CalibrationReviewViewRefs:
-        """Assemble review labels (action buttons are laid out on ``panel_host``)."""
-        review_content.add(
-            toga.Label(
-                "Verify configuration",
-                style=pack_review_section_title(padding_bottom=8, text_align=CENTER),
-            )
-        )
-        ay_l, az_l = _MOTION_AXIS_YZ
-        xy_label = toga.Label(
-            f"{ay_l}=0.00 · {az_l}=0.00",
-            style=Pack(padding_bottom=6, font_size=14, text_align=CENTER),
-        )
-        review_content.add(xy_label)
-        neutral_label = toga.Label(
-            f"Neutral {ay_l}={self.pending_neutral_x:.4f} · {az_l}={self.pending_neutral_y:.4f}",
-            style=pack_muted_body(padding_bottom=10, text_align=CENTER),
-        )
-        review_content.add(neutral_label)
-        return CalibrationReviewViewRefs(xy_label=xy_label, neutral_label=neutral_label)
-
     def show_calibration_view(self, widget: Optional[toga.Widget] = None) -> None:
         self.current_view = AppView.CALIBRATION
         self._clear_panel_host()
@@ -959,21 +815,11 @@ class EmotivBridgeApp(toga.App):
             )
         )
         ph.add(cal_content)
-        self._calibration_refs = self._build_calibration_screen(cal_content)
-
-        cancel_row = toga.Box(
-            style=Pack(direction=ROW, alignment=CENTER, padding_top=8, padding_bottom=8)
+        self._calibration_refs = build_calibration_screen(
+            cal_content,
+            on_cancel=lambda w: self.show_main_view(),
+            on_timer_press=self._on_calibration_timer_button,
         )
-        ph.add(cancel_row)
-        cancel_row.add(toga.Box(style=Pack(flex=1)))
-        cancel_row.add(
-            toga.Button(
-                "Cancel",
-                on_press=lambda w: self.show_main_view(),
-                style=pack_action_button(),
-            )
-        )
-        cancel_row.add(toga.Box(style=Pack(flex=1)))
 
         self._sync_crosshair_visibility()
 
@@ -996,27 +842,20 @@ class EmotivBridgeApp(toga.App):
             )
         )
         ph.add(review_content)
-        self._calibration_review_refs = self._build_calibration_review_screen(review_content)
+        assert self.pending_neutral_x is not None and self.pending_neutral_y is not None
+        self._calibration_review_refs = build_calibration_review_content(
+            review_content,
+            neutral_acc_y=self.pending_neutral_x,
+            neutral_acc_z=self.pending_neutral_y,
+        )
 
-        row = toga.Box(style=Pack(direction=ROW, alignment=CENTER, padding_top=16, padding_left=12, padding_right=12))
-        ph.add(row)
-        row.add(toga.Box(style=Pack(flex=1)))
-        row.add(
-            toga.Button(
-                "Cancel",
-                on_press=lambda w: self.show_main_view(),
-                style=pack_action_button(gap_after=True),
+        ph.add(
+            build_calibration_review_action_row(
+                on_cancel=lambda w: self.show_main_view(),
+                on_retry=lambda w: self.show_calibration_view(),
+                on_save=lambda w: self.save_calibration(),
             )
         )
-        row.add(
-            toga.Button(
-                "Retry",
-                on_press=lambda w: self.show_calibration_view(),
-                style=pack_action_button(gap_after=True),
-            )
-        )
-        row.add(toga.Button("Save", on_press=lambda w: self.save_calibration(), style=pack_action_button()))
-        row.add(toga.Box(style=Pack(flex=1)))
 
         self._sync_crosshair_visibility()
 
@@ -1332,7 +1171,7 @@ class EmotivBridgeApp(toga.App):
             self._sync_live_motion_readout(cr.motion_value_labels)
         rr = self._calibration_review_refs
         if rr is not None:
-            ay_l, az_l = _MOTION_AXIS_YZ
+            ay_l, az_l = MOTION_AXIS_YZ
             rr.xy_label.text = f"{ay_l}={self.current_x:.4f} · {az_l}={self.current_y:.4f}"
 
     def _tick_win32_connection_busy_fallback(self, mv: Optional[MainViewRefs]) -> None:
