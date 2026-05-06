@@ -85,7 +85,6 @@ else
 fi
 
 SPEC_PATH="$PYTHON_DIR/app.spec"
-DIST_EXE="$PYTHON_DIR/dist/EmotivController.exe"
 
 if [[ "$SKIP_SIGN" -eq 0 ]] && [[ -z "$PFX_PATH" ]] && [[ -z "$CERT_THUMBPRINT" ]]; then
   echo "Provide signing credentials or skip signing explicitly:" >&2
@@ -116,6 +115,9 @@ run_python() {
 APP_VERSION="${APP_VERSION//[[:space:]]/}"
 [[ -n "$APP_VERSION" ]] || APP_VERSION="0.0.0-dev"
 UPDATE_MANIFEST_URL="${UPDATE_MANIFEST_URL//[[:space:]]/}"
+
+# Must stay consistent with app.spec (EmotivController-{sanitized APP_VERSION}); tags/VERSION use semver only.
+DIST_EXE="$PYTHON_DIR/dist/EmotivController-${APP_VERSION}.exe"
 
 RELEASE_INFO_PATH="$PYTHON_DIR/_release_info.py"
 export _BUILD_RELEASE_INFO_PATH="$RELEASE_INFO_PATH"
@@ -152,6 +154,7 @@ else
   echo "PyInstaller: windowed (no console)."
 fi
 
+export EMOTIV_PYI_APP_VERSION="$APP_VERSION"
 echo "Building EXE with PyInstaller..."
 run_python -m PyInstaller --noconfirm --clean app.spec
 
