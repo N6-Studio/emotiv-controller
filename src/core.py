@@ -1,9 +1,12 @@
-"""Pure movement / mental-command logic (no UI, I/O, or hardware).
+"""Pure movement and mental-command parsing (no UI, I/O, or hardware).
 
 Head-tilt for WASD movement is derived from the Cortex ``mot`` stream accelerometer
 columns ``ACCX``, ``ACCY``, ``ACCZ``. Forward/backward follows **ACCY** (negative
 forward, positive backward); left/right follows **ACCZ** (negative left, positive
 right). ``ACCX`` is available for display but not used for movement thresholds.
+
+Mental commands come from the Cortex ``com`` stream (``act``, ``pow``); they drive
+configurable keyboard bindings only and do not map onto movement directions.
 
 Layouts without named ACC columns fall through to the synthetic ``mot[-2], mot[-1]``
 legacy convention used by dev/test fixtures.
@@ -15,7 +18,7 @@ for the column layout of newer headsets.
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable
+from typing import Any, Container, Iterable
 
 # Default Cortex ``mot`` layout when ``cols`` is unavailable (MEMS counter + quaternion + ACC + MAG).
 _MOT_COLS_12 = (
@@ -39,8 +42,8 @@ ACC_Y_MAX = 1.0
 ACC_Z_MIN = -1.0
 ACC_Z_MAX = 1.0
 
-# Mental command actions mapped to movement (Cortex `com[0]` names).
-COM_MAPPED_MENTAL_ACTIONS: tuple[str, ...] = ("push", "pull", "left", "right")
+# Mental command actions (Cortex ``com`` act names) exposed for UI key bindings.
+COM_MAPPED_MENTAL_ACTIONS: tuple[str, ...] = ("push", "pull", "lift", "drop")
 
 
 def build_mot_index(cols: list[str]) -> dict[str, int]:
@@ -201,8 +204,13 @@ def mental_command_to_sets(
     com: Iterable,
     *,
     power_threshold: float,
+    enabled_actions: Container[str] | None = None,
 ) -> tuple[set[str], set[str]]:
-    """Returns (movement labels for the pad UI, mental actions for COM keys)."""
+    """Returns ``(set(), mental_actions)`` — COM never contributes movement labels.
+
+    When ``enabled_actions`` is set, commands whose Cortex action name is not in
+    that container are ignored (no simulated COM key path).
+    """
     com_list = list(com)
     if len(com_list) < 2:
         return set(), set()
@@ -213,14 +221,9 @@ def mental_command_to_sets(
     if power < power_threshold:
         return set(), set()
 
-    mapping = {
-        "push": "forward",
-        "pull": "backward",
-        "left": "left",
-        "right": "right",
-    }
-
-    movement = mapping.get(action)
-    if not movement:
+    if enabled_actions is not None and action not in enabled_actions:
         return set(), set()
-    return {movement}, {action}
+
+    if action not in COM_MAPPED_MENTAL_ACTIONS:
+        return set(), set()
+    return set(), {action}

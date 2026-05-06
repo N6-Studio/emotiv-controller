@@ -12,7 +12,7 @@
   "keyboard_enabled": false,
   "keyboard_com_enabled": false,
   "debug_mode": false,
-  "com_power_threshold": 0.25,
+  "com_power_threshold": 0.2,
   "key_bindings": {
     "forward": "w",
     "left": "a",
@@ -20,10 +20,10 @@
     "right": "d"
   },
   "com_key_bindings": {
-    "push": "q",
+    "push": "",
     "pull": "e",
-    "left": "r",
-    "right": "f"
+    "lift": "r",
+    "drop": "f"
   },
   "cortex_url": "ws://localhost:6868",
   "cortex_streams": "mot,com",

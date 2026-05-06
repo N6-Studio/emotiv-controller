@@ -62,8 +62,8 @@ DEFAULT_COM_POWER_THRESHOLD = 0.25
 DEFAULT_COM_KEY_BINDINGS = {
     "push": "q",
     "pull": "e",
-    "left": "r",
-    "right": "f",
+    "lift": "r",
+    "drop": "f",
 }
 
 # Labels for the Cortex connection settings form (values live on ``AppConfig``).
@@ -150,9 +150,12 @@ class AppConfig:
         else:
             merged = dict(self.com_key_bindings)
             for cmd in COM_MAPPED_MENTAL_ACTIONS:
-                v = merged.get(cmd)
-                if not v or not str(v).strip():
+                if cmd not in merged:
                     merged[cmd] = com_defaults[cmd]
+                    continue
+                v = merged.get(cmd)
+                if v is None or not str(v).strip():
+                    merged[cmd] = ""
                 else:
                     merged[cmd] = str(v).strip()
             self.com_key_bindings = merged

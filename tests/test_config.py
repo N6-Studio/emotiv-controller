@@ -146,7 +146,7 @@ def test_load_config_ignores_unknown_json_keys(monkeypatch, tmp_path):
     assert not hasattr(cfg, "future_field")
 
 
-def test_appconfig_com_key_bindings_merge_blank():
+def test_appconfig_com_key_bindings_blank_disables():
     from app import AppConfig
 
     cfg = AppConfig(
@@ -159,14 +159,32 @@ def test_appconfig_com_key_bindings_merge_blank():
         com_key_bindings={
             "push": "x",
             "pull": "",
-            "left": "  ",
-            "right": "z",
+            "lift": "  ",
+            "drop": "z",
         },
     )
     assert cfg.com_key_bindings["push"] == "x"
+    assert cfg.com_key_bindings["pull"] == ""
+    assert cfg.com_key_bindings["lift"] == ""
+    assert cfg.com_key_bindings["drop"] == "z"
+
+
+def test_appconfig_com_key_bindings_missing_keys_use_defaults():
+    from app import AppConfig
+
+    cfg = AppConfig(
+        key_bindings={
+            "forward": "w",
+            "left": "a",
+            "backward": "s",
+            "right": "d",
+        },
+        com_key_bindings={"push": "x"},
+    )
+    assert cfg.com_key_bindings["push"] == "x"
     assert cfg.com_key_bindings["pull"] == "e"
-    assert cfg.com_key_bindings["left"] == "r"
-    assert cfg.com_key_bindings["right"] == "z"
+    assert cfg.com_key_bindings["lift"] == "r"
+    assert cfg.com_key_bindings["drop"] == "f"
 
 
 def test_appconfig_partial_movement_thresholds_use_base():

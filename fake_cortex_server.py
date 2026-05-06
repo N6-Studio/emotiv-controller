@@ -169,6 +169,35 @@ def _randomize_stream_defaults(args: argparse.Namespace) -> None:
 
 _QUAT_UPRIGHT = _quat_from_pitch_roll_rad(0.0, 0.0)
 
+# Synthetic mental-command stream: sharp rise → hold near max → ramp down (repeating).
+_COM_ACTIONS = ("push", "pull", "lift", "drop")
+_COM_PEAK_POWER = 0.92
+_COM_RAMP_UP_S = 0.35
+_COM_HOLD_HIGH_S = 2.0
+_COM_RAMP_DOWN_S = 0.8
+_COM_ACTION_PERIOD_S = 0.9
+
+
+def _synthetic_com_sample(t: float) -> tuple[str, float]:
+    """``pow`` ramps up quickly, stays high ~``_COM_HOLD_HIGH_S``, then falls; repeats."""
+    ru = max(_COM_RAMP_UP_S, 1e-6)
+    h = max(_COM_HOLD_HIGH_S, 0.0)
+    rd = max(_COM_RAMP_DOWN_S, 1e-6)
+    peak = max(0.0, min(1.0, _COM_PEAK_POWER))
+    period = ru + h + rd
+    u = (t % period) if period > 0 else 0.0
+    if u < ru:
+        power = peak * (u / ru)
+    elif u < ru + h:
+        power = peak
+    else:
+        down_u = u - ru - h
+        power = peak * (1.0 - down_u / rd)
+    power = max(0.0, min(1.0, power))
+    idx = int(t / max(_COM_ACTION_PERIOD_S, 1e-6)) % len(_COM_ACTIONS)
+    act = _COM_ACTIONS[idx]
+    return act, round(power, 4)
+
 
 async def _stream_loop(
     websocket: Any,
@@ -265,10 +294,8 @@ async def _stream_loop(
         ]
         payload: dict = {"mot": mot}
         if include_com:
-            if int(t / 2.0) % 3 == 0:
-                payload["com"] = ["push", 0.55]
-            else:
-                payload["com"] = ["neutral", 0.0]
+            ca, cp = _synthetic_com_sample(t)
+            payload["com"] = [ca, cp]
         try:
             await websocket.send(json.dumps(payload))
         except Exception as exc:
@@ -415,6 +442,7 @@ def main() -> None:
     )
     p.add_argument(
         "--com",
+        "--include-com",
         action="store_true",
         help="Include synthetic mental-command frames (com) alongside mot",
     )

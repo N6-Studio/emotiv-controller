@@ -12,6 +12,8 @@ from queue import Empty, Queue
 from typing import Any, Callable, Optional
 
 import toga
+from toga.constants import Baseline
+from toga.fonts import SYSTEM, Font
 from travertino.size import at_least
 
 warnings.filterwarnings(
@@ -29,7 +31,6 @@ from bridge_core import (
     COM_MAPPED_MENTAL_ACTIONS,
     CONFIG_PATH,
     CortexClient,
-    DEFAULT_COM_KEY_BINDINGS,
     MOVEMENTS,
     SimulatedKeyboard,
     _status_clears_connection_error_ui,
@@ -78,12 +79,43 @@ _MAIN_CROSSHAIR_MIN = 280
 # Non-arrow D-pad cells use a fully transparent background (Toga/Travertino rgba).
 _DPAD_CELL_TRANSPARENT = "rgba(0, 0, 0, 0)"
 _DPAD_ARROW_IDLE_BG = "#e5e7eb"
+# Mental-command key badges on the main view (drawn canvas chips — avoids WinForms
+# disabled-button chrome and unreliable Label panel fills).
+_COM_KEY_BADGE_CANVAS_W = 44
+_COM_KEY_BADGE_CANVAS_H = 22
+_COM_KEY_BADGE_FILL = "#e5e7eb"
+_COM_KEY_BADGE_BORDER = "#cbd5e1"
+_COM_KEY_BADGE_TEXT = "#0f172a"
+_COM_KEY_BADGE_TEXT_MUTED = "#64748b"
+_COM_KEY_BADGE_FONT = Font(SYSTEM, 11)
 _DPAD_ARROW_GLYPHS: dict[str, str] = {
     "forward": "\u2191",
     "left": "\u2190",
     "backward": "\u2193",
     "right": "\u2192",
 }
+
+
+def _paint_com_key_badge(canvas: toga.Canvas, text: str, *, muted: bool) -> None:
+    """Fill a fixed-size chip with light gray, stroke, and centered key text."""
+    ctx = canvas.context
+    ctx.clear()
+    w = float(_COM_KEY_BADGE_CANVAS_W)
+    h = float(_COM_KEY_BADGE_CANVAS_H)
+    with ctx.Fill(color=_COM_KEY_BADGE_FILL) as bg:
+        bg.rect(0.0, 0.0, w, h)
+    with ctx.Stroke(color=_COM_KEY_BADGE_BORDER, line_width=1.0) as edge:
+        edge.rect(0.5, 0.5, w - 1.0, h - 1.0)
+    fg = _COM_KEY_BADGE_TEXT_MUTED if muted else _COM_KEY_BADGE_TEXT
+    x = max(3.0, (w - 6.5 * max(len(text), 1)) / 2.0)
+    with ctx.Fill(color=fg) as glyph:
+        glyph.write_text(
+            text,
+            x,
+            h / 2.0,
+            font=_COM_KEY_BADGE_FONT,
+            baseline=Baseline.MIDDLE,
+        )
 
 
 def _action_btn_style(*, gap_after: bool = False) -> Pack:
@@ -158,7 +190,8 @@ class EmotivBridgeApp(toga.App):
         self._movement_pad_cell_size: int = 0
         self.com_powers = {a: 0.0 for a in COM_MAPPED_MENTAL_ACTIONS}
         self.com_power_labels: Optional[dict[str, toga.Label]] = None
-        self.com_key_labels: Optional[dict[str, toga.Label]] = None
+        self.com_key_badges: Optional[dict[str, toga.Canvas]] = None
+        self._com_key_badge_display: dict[str, str] = {}
         self.com_threshold_hint: Optional[toga.Label] = None
 
         self.connection_failed = False
@@ -417,7 +450,8 @@ class EmotivBridgeApp(toga.App):
         self._movement_pad_square_labels = []
         self._movement_pad_cell_size = 0
         self.com_power_labels = None
-        self.com_key_labels = None
+        self.com_key_badges = None
+        self._com_key_badge_display.clear()
         self.com_threshold_hint = None
 
     def _restart_cortex_client(self, *, clear_error_ui: bool, status_message: str) -> None:
@@ -720,36 +754,60 @@ class EmotivBridgeApp(toga.App):
         )
         com_header.add(self.com_threshold_hint)
 
-        powers_row = toga.Box(style=Pack(direction=ROW, alignment=TOP))
+        powers_row = toga.Box(style=Pack(direction=ROW, alignment=CENTER))
         com_box.add(powers_row)
         self.com_power_labels = {}
-        self.com_key_labels = {}
-        for cmd in COM_MAPPED_MENTAL_ACTIONS:
+        self.com_key_badges = {}
+        self._com_key_badge_display.clear()
+        n_cmds = len(COM_MAPPED_MENTAL_ACTIONS)
+        for idx, cmd in enumerate(COM_MAPPED_MENTAL_ACTIONS):
             col = toga.Box(style=Pack(direction=ROW, flex=1, alignment=CENTER))
             powers_row.add(col)
             col.add(
                 toga.Label(
                     cmd,
-                    style=Pack(font_size=10, color="#9ca3af", padding_right=4),
+                    style=Pack(font_size=10, color="#9ca3af", padding_right=6),
                 )
             )
-            kl = toga.Label(
-                "",
-                style=Pack(font_size=10, color="#9ca3af", padding_right=6),
+            chip = toga.Canvas(
+                style=Pack(
+                    width=_COM_KEY_BADGE_CANVAS_W,
+                    height=_COM_KEY_BADGE_CANVAS_H,
+                ),
             )
-            col.add(kl)
-            self.com_key_labels[cmd] = kl
+            col.add(chip)
+            self.com_key_badges[cmd] = chip
+            bound_key = str(self.config_data.com_key_bindings.get(cmd, "")).strip()
+            if bound_key:
+                chip.style.visibility = VISIBLE
+                self._com_key_badge_display[cmd] = bound_key
+                _paint_com_key_badge(chip, bound_key, muted=False)
+            else:
+                chip.style.visibility = HIDDEN
+            col.add(toga.Box(style=Pack(flex=1)))
             vl = toga.Label(
                 "0.00",
                 style=Pack(
                     font_size=11,
                     font_weight="bold",
-                    text_align=RIGHT,
-                    flex=1,
+                    padding_right=4,
                 ),
             )
             col.add(vl)
             self.com_power_labels[cmd] = vl
+
+            if idx < n_cmds - 1:
+                powers_row.add(
+                    toga.Label(
+                        "|",
+                        style=Pack(
+                            font_size=11,
+                            color="#cbd5e1",
+                            padding_left=4,
+                            padding_right=4,
+                        ),
+                    )
+                )
 
         body.add(toga.Box(style=Pack(flex=1)))
 
@@ -1113,10 +1171,8 @@ class EmotivBridgeApp(toga.App):
             for m, inp in per_inputs.items():
                 self.config_data.movement_thresholds[m] = float(inp.value)
             self.config_data.com_power_threshold = float(com_thr.value)
-            defaults = dict(DEFAULT_COM_KEY_BINDINGS)
             for cmd in COM_MAPPED_MENTAL_ACTIONS:
-                raw = com_entries[cmd].value.strip()
-                self.config_data.com_key_bindings[cmd] = raw if raw else defaults[cmd]
+                self.config_data.com_key_bindings[cmd] = com_entries[cmd].value.strip()
             save_config(self.config_data)
             self.show_main_view()
 
@@ -1266,9 +1322,15 @@ class EmotivBridgeApp(toga.App):
         )
 
     def map_mental_command(self, com: list) -> tuple[set[str], set[str]]:
+        enabled = frozenset(
+            a
+            for a in COM_MAPPED_MENTAL_ACTIONS
+            if str(self.config_data.com_key_bindings.get(a, "")).strip()
+        )
         return mental_command_to_sets(
             com,
             power_threshold=float(self.config_data.com_power_threshold),
+            enabled_actions=enabled,
         )
 
     def get_active_neutral_x(self) -> Optional[float]:
@@ -1394,16 +1456,29 @@ class EmotivBridgeApp(toga.App):
             thr = float(self.config_data.com_power_threshold)
             if self.com_threshold_hint is not None:
                 self.com_threshold_hint.text = f"Activate after ≥ {thr:.2f}"
-            if self.com_key_labels is not None:
+            if self.com_key_badges is not None:
                 for cmd in COM_MAPPED_MENTAL_ACTIONS:
-                    key = str(self.config_data.com_key_bindings.get(cmd, ""))
-                    kl = self.com_key_labels.get(cmd)
-                    if kl is not None:
-                        kl.text = f"\u2192 {key}" if key else ""
+                    key = str(self.config_data.com_key_bindings.get(cmd, "")).strip()
+                    chip = self.com_key_badges.get(cmd)
+                    if chip is None:
+                        continue
+                    if not key:
+                        chip.style.visibility = HIDDEN
+                        self._com_key_badge_display.pop(cmd, None)
+                        continue
+                    chip.style.visibility = VISIBLE
+                    if self._com_key_badge_display.get(cmd) == key:
+                        continue
+                    self._com_key_badge_display[cmd] = key
+                    _paint_com_key_badge(chip, key, muted=False)
             for cmd, lab in self.com_power_labels.items():
                 p = float(self.com_powers.get(cmd, 0.0))
                 lab.text = f"{p:.2f}"
-                lab.style.color = "#0f766e" if p >= thr else "#111827"
+                bound = bool(str(self.config_data.com_key_bindings.get(cmd, "")).strip())
+                if not bound:
+                    lab.style.color = "#d1d5db"
+                else:
+                    lab.style.color = "#0f766e" if p >= thr else "#111827"
 
         motion_pad = self.map_motion(self.current_x, self.current_y)
         display_movements = motion_pad | self.com_pad_movements
