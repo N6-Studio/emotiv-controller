@@ -9,7 +9,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Queue
 from typing import Any, Callable, Optional
 
 import toga
@@ -27,17 +27,13 @@ from toga.style import Pack
 from toga.style.pack import CENTER, COLUMN, HIDDEN, NONE, RIGHT, ROW, TOP, VISIBLE
 
 from bridge_core import (
-    APP_ENV_UI_KEYS,
-    AppConfig,
     COM_MAPPED_MENTAL_ACTIONS,
-    CONFIG_PATH,
     CortexClient,
     MOVEMENTS,
     SimulatedKeyboard,
     _status_clears_connection_error_ui,
     apply_cortex_env_form_to_config,
     apply_staged_update,
-    app_env_form_values,
     check_update_available,
     download_and_verify,
     get_app_version,
@@ -54,6 +50,30 @@ from core import (
     reticle_offset_acc_to_normalized,
 )
 from update_service import semver_less
+
+from queue_utils import drain_queue
+from settings_ui import (
+    build_env_settings_scroll,
+    build_general_tab,
+    build_mental_tab,
+    build_motion_tab,
+    env_intro_labels,
+)
+from ui_theme import (
+    pack_action_button,
+    pack_calibration_averages_line,
+    pack_calibration_timer,
+    pack_com_header,
+    pack_com_hint,
+    pack_error,
+    pack_muted_body,
+    pack_muted_small,
+    pack_review_section_title,
+    pack_section_title,
+    pack_status_line,
+)
+from ui_views import AppView
+from win32_hotkey import win32_hotkey_thread_main
 
 # ``current_x`` / ``current_y`` are Cortex ACCY / ACCZ (forward-back / left-right); ``current_acc_x`` is ACCX (display).
 _MOTION_AXIS_YZ: tuple[str, str] = ("ACC Y", "ACC Z")
@@ -128,6 +148,7 @@ class MainViewRefs:
     keyboard_label: Optional[toga.Label] = None
     retry_button: Optional[toga.Button] = None
     connection_activity: Optional[toga.ActivityIndicator] = None
+    connection_busy_fallback: Optional[toga.Label] = None
     main_motion_readout: Optional[toga.Box] = None
     motion_readout_value_labels: list[toga.Label] = field(default_factory=list)
     com_power_labels: Optional[dict[str, toga.Label]] = None
@@ -136,16 +157,24 @@ class MainViewRefs:
     com_threshold_hint: Optional[toga.Label] = None
 
 
-def _action_btn_style(*, gap_after: bool = False) -> Pack:
-    """Larger primary actions; use gap_after on buttons that have another button to their right."""
-    return Pack(
-        font_size=14,
-        font_weight="bold",
-        padding_top=12,
-        padding_bottom=12,
-        padding_left=16,
-        padding_right=10 if gap_after else 18,
-    )
+@dataclass
+class CalibrationViewRefs:
+    """Widgets updated live during neutral calibration."""
+
+    instruction_label: toga.Label
+    start_button: toga.Button
+    timer_label: toga.Label
+    live_readout: toga.Box
+    motion_value_labels: list[toga.Label]
+    xy_label: toga.Label
+
+
+@dataclass
+class CalibrationReviewViewRefs:
+    """Calibration verification screen widgets."""
+
+    xy_label: toga.Label
+    neutral_label: toga.Label
 
 
 def _icon() -> Optional[toga.Icon]:
@@ -202,7 +231,9 @@ class EmotivBridgeApp(toga.App):
         self.pending_neutral_x: Optional[float] = None
         self.pending_neutral_y: Optional[float] = None
 
-        self.current_view: Optional[str] = None
+        self.current_view: Optional[AppView] = None
+        self._main_connection_busy = False
+        self._busy_fallback_tick = 0
         self.movement_buttons: dict[str, toga.Label] = {}
         self._movement_pad_square_labels: list[toga.Label] = []
         self._movement_pad_cell_size: int = 0
@@ -225,14 +256,8 @@ class EmotivBridgeApp(toga.App):
         # Last Cortex / connection line (not keyboard hints) so we can restore after Settings clears widgets.
         self._last_cortex_status: str = "Connecting..."
         self._main_view: Optional[MainViewRefs] = None
-        self.calibration_live_readout: Optional[toga.Box] = None
-        self._calibration_motion_value_labels: list[toga.Label] = []
-        self.calibration_instruction_label: Optional[toga.Label] = None
-        self.calibration_start_button: Optional[toga.Button] = None
-        self.timer_label: Optional[toga.Label] = None
-        self.calibration_xy_label: Optional[toga.Label] = None
-        self.review_xy_label: Optional[toga.Label] = None
-        self.review_neutral_label: Optional[toga.Label] = None
+        self._calibration_refs: Optional[CalibrationViewRefs] = None
+        self._calibration_review_refs: Optional[CalibrationReviewViewRefs] = None
 
     def startup(self) -> None:
         self.main_window = toga.MainWindow(
@@ -325,7 +350,7 @@ class EmotivBridgeApp(toga.App):
         """Hide on Settings; main / calibration / review = same square aim + D-pad row layout."""
         if self.cross_canvas is None:
             return
-        if self.current_view in ("settings", "env_settings"):
+        if self.current_view in (AppView.SETTINGS, AppView.ENV_SETTINGS):
             self.cross_canvas.intrinsic.width = None
             self.cross_canvas.intrinsic.height = None
             self.cross_canvas.style.update(visibility=HIDDEN, height=0, width=0, flex=0)
@@ -364,65 +389,6 @@ class EmotivBridgeApp(toga.App):
         })
         self.hotkey_listener.start()
 
-    def _win32_hotkey_thread_main(self) -> None:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-
-        class POINT(ctypes.Structure):
-            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
-
-        class MSG(ctypes.Structure):
-            _fields_ = [
-                ("hwnd", wintypes.HWND),
-                ("message", wintypes.UINT),
-                ("wParam", wintypes.WPARAM),
-                ("lParam", wintypes.LPARAM),
-                ("time", wintypes.DWORD),
-                ("pt", POINT),
-            ]
-
-        WM_HOTKEY = 0x0312
-        MOD_ALT = 0x0001
-        MOD_CONTROL = 0x0002
-        MOD_SHIFT = 0x0004
-        VK_K = 0x4B
-        hotkey_id = 0x4D42
-
-        primary_mod = MOD_CONTROL | MOD_SHIFT
-        attempts = (
-            (primary_mod, None),
-            (MOD_CONTROL | MOD_ALT, "hint_ctrl_alt_k"),
-        )
-        registered = False
-        for mod_flags, hint_cmd in attempts:
-            if user32.RegisterHotKey(None, hotkey_id, mod_flags, VK_K):
-                registered = True
-                if hint_cmd:
-                    self._hotkey_control_queue.put(hint_cmd)
-                break
-
-        if not registered:
-            self._hotkey_control_queue.put("fallback_pynput")
-            return
-
-        self._hotkey_win32_registered.set()
-        msg = MSG()
-        while True:
-            r = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
-            if r == 0:
-                break
-            if r == -1:
-                break
-            if msg.message == WM_HOTKEY:
-                self.keyboard_shortcut_queue.put(True)
-            else:
-                user32.TranslateMessage(ctypes.byref(msg))
-                user32.DispatchMessageW(ctypes.byref(msg))
-
-        user32.UnregisterHotKey(None, hotkey_id)
-
     def start_shortcut_listener(self) -> None:
         self.hotkey_listener = None
         self._hotkey_win32_registered.clear()
@@ -432,7 +398,11 @@ class EmotivBridgeApp(toga.App):
             return
 
         self._hotkey_thread = threading.Thread(
-            target=self._win32_hotkey_thread_main,
+            target=lambda: win32_hotkey_thread_main(
+                keyboard_shortcut_queue=self.keyboard_shortcut_queue,
+                control_queue=self._hotkey_control_queue,
+                registered_event=self._hotkey_win32_registered,
+            ),
             name="win32-hotkey",
             daemon=True,
         )
@@ -442,14 +412,8 @@ class EmotivBridgeApp(toga.App):
         if self.panel_host is None:
             return
         self.panel_host.clear()
-        self.calibration_instruction_label = None
-        self.calibration_start_button = None
-        self.timer_label = None
-        self.calibration_xy_label = None
-        self.review_xy_label = None
-        self.review_neutral_label = None
-        self.calibration_live_readout = None
-        self._calibration_motion_value_labels = []
+        self._calibration_refs = None
+        self._calibration_review_refs = None
         self._main_view = None
         self.movement_buttons = {}
         self._movement_pad_square_labels = []
@@ -544,7 +508,11 @@ class EmotivBridgeApp(toga.App):
         """Size all D-pad cells as squares from the crosshair canvas bounds (same row as pad)."""
         if not self._movement_pad_square_labels:
             return
-        if self.current_view not in ("main", "calibration", "calibration_review"):
+        if self.current_view not in (
+            AppView.MAIN,
+            AppView.CALIBRATION,
+            AppView.CALIBRATION_REVIEW,
+        ):
             return
         w, h = int(self._cross_w), int(self._cross_h)
         if w < 12 or h < 12:
@@ -637,7 +605,7 @@ class EmotivBridgeApp(toga.App):
     def _build_live_motion_readout_row(self) -> tuple[toga.Box, list[toga.Label]]:
         """ACC X / Y / Z readout (movement uses Y and Z)."""
         value_labels: list[toga.Label] = []
-        pack_muted = Pack(font_size=12, color="#6b7280")
+        muted_caption = pack_muted_body(font_size=12)
 
         row = toga.Box(
             style=Pack(
@@ -650,7 +618,7 @@ class EmotivBridgeApp(toga.App):
         )
 
         def add_muted(t: str) -> None:
-            row.add(toga.Label(t, style=pack_muted))
+            row.add(toga.Label(t, style=muted_caption))
 
         def add_acc_value(initial: str, *, sample: float) -> None:
             lab = toga.Label(
@@ -683,19 +651,27 @@ class EmotivBridgeApp(toga.App):
 
     def _sync_main_connection_activity(self, status: str) -> None:
         mv = self._main_view
-        if mv is None or mv.connection_activity is None:
+        if mv is None:
             return
         low = status.lower()
         busy = "connecting" in low or "reconnecting" in low
+        self._main_connection_busy = busy
         ai = mv.connection_activity
-        if busy:
-            ai.start()
-        else:
-            ai.stop()
+        if ai is not None:
+            if busy:
+                ai.start()
+            else:
+                ai.stop()
+        fb = mv.connection_busy_fallback
+        if fb is not None:
+            fb.style.visibility = VISIBLE if busy else HIDDEN
+            if not busy:
+                fb.text = ""
+                self._busy_fallback_tick = 0
 
     def _build_main_status_strip(self, refs: MainViewRefs) -> toga.Box:
         err_box = toga.Box(style=Pack(direction=COLUMN, padding_bottom=8))
-        refs.error_label = toga.Label("", style=Pack(color="#b91c1c"))
+        refs.error_label = toga.Label("", style=pack_error())
         err_box.add(refs.error_label)
 
         top = toga.Box(style=Pack(direction=ROW, padding_left=10, padding_right=10, padding_top=10, alignment=TOP))
@@ -707,16 +683,22 @@ class EmotivBridgeApp(toga.App):
         if sys.platform != "win32":
             refs.connection_activity = toga.ActivityIndicator(style=Pack(width=22, height=22, padding_right=8))
             info_left.add(refs.connection_activity)
+        else:
+            refs.connection_busy_fallback = toga.Label(
+                "",
+                style=pack_status_line(width=28, padding_right=6, visibility=HIDDEN),
+            )
+            info_left.add(refs.connection_busy_fallback)
 
         refs.status_label = toga.Label(
             self._last_cortex_status,
-            style=Pack(color="#6b7280", font_size=11, flex=1),
+            style=pack_status_line(flex=1),
         )
         info_left.add(refs.status_label)
 
         refs.keyboard_label = toga.Label(
             "",
-            style=Pack(color="#6b7280", font_size=11, text_align=RIGHT),
+            style=pack_status_line(text_align=RIGHT),
         )
         top.add(refs.keyboard_label)
 
@@ -750,12 +732,12 @@ class EmotivBridgeApp(toga.App):
         com_header = toga.Box(style=Pack(direction=ROW, alignment=TOP, padding_bottom=6))
         com_box.add(com_header)
         com_header.add(
-            toga.Label("COM power", style=Pack(font_weight="bold", color="#6b7280")),
+            toga.Label("COM power", style=pack_com_header()),
         )
         com_header.add(toga.Box(style=Pack(flex=1)))
         refs.com_threshold_hint = toga.Label(
             "",
-            style=Pack(font_size=10, color="#9ca3af", text_align=RIGHT),
+            style=pack_com_hint(text_align=RIGHT),
         )
         com_header.add(refs.com_threshold_hint)
 
@@ -774,7 +756,7 @@ class EmotivBridgeApp(toga.App):
             row_top.add(
                 toga.Label(
                     cmd,
-                    style=Pack(font_size=10, color="#9ca3af", padding_right=6),
+                    style=pack_com_hint(padding_right=6),
                 )
             )
             chip = toga.Canvas(
@@ -829,7 +811,7 @@ class EmotivBridgeApp(toga.App):
         return body
 
     def show_main_view(self, widget: Optional[toga.Widget] = None) -> None:
-        self.current_view = "main"
+        self.current_view = AppView.MAIN
         self.calibration_active = False
         self._clear_panel_host()
         assert self.panel_host is not None
@@ -857,27 +839,104 @@ class EmotivBridgeApp(toga.App):
         self.show_calibration_view()
 
     def _on_calibration_timer_button(self, widget: Optional[toga.Widget] = None) -> None:
-        if self.current_view != "calibration":
+        if self.current_view != AppView.CALIBRATION:
             return
+        cr = self._calibration_refs
         if self.calibration_active and self.calibration_started_at is not None:
             self.calibration_active = False
             self.calibration_started_at = None
             self.calibration_samples = []
-            if self.timer_label is not None:
-                self.timer_label.text = "—"
-            if self.calibration_xy_label is not None:
-                self.calibration_xy_label.text = "Averages appear while the timer runs."
-            if self.calibration_start_button is not None:
-                self.calibration_start_button.text = "Start 10 s timer"
+            if cr is not None:
+                cr.timer_label.text = "—"
+                cr.xy_label.text = "Averages appear while the timer runs."
+                cr.start_button.text = "Start 10 s timer"
             return
         self.calibration_active = True
         self.calibration_started_at = time.time()
         self.calibration_samples = []
-        if self.calibration_start_button is not None:
-            self.calibration_start_button.text = "Reset timer"
+        if cr is not None:
+            cr.start_button.text = "Reset timer"
+
+    def _build_calibration_screen(self, cal_content: toga.Box) -> CalibrationViewRefs:
+        """Assemble calibration-specific widgets (crosshair row is added separately)."""
+        cal_content.add(
+            toga.Label(
+                "Calibration",
+                style=pack_section_title(padding_bottom=4, text_align=CENTER),
+            )
+        )
+        instruction_label = toga.Label(
+            "After you start, hold a comfortable neutral head pose for the full 10 seconds.",
+            style=pack_muted_body(padding_bottom=4, text_align=CENTER),
+        )
+        cal_content.add(instruction_label)
+        cal_content.add(
+            toga.Label(
+                "Neutral is set to the average position recorded during the timer.",
+                style=pack_muted_body(font_size=12, padding_bottom=8, text_align=CENTER),
+            )
+        )
+
+        start_button = toga.Button(
+            "Start 10 s timer",
+            on_press=self._on_calibration_timer_button,
+            style=pack_action_button(),
+        )
+        cal_content.add(start_button)
+
+        timer_label = toga.Label(
+            "—",
+            style=pack_calibration_timer(padding_bottom=6, text_align=CENTER),
+        )
+        cal_content.add(timer_label)
+
+        live_readout, motion_value_labels = self._build_live_motion_readout_row()
+        cal_wrap = toga.Box(
+            style=Pack(direction=ROW, alignment=CENTER, padding_bottom=6),
+        )
+        cal_wrap.add(toga.Box(style=Pack(flex=1)))
+        cal_wrap.add(live_readout)
+        cal_wrap.add(toga.Box(style=Pack(flex=1)))
+        cal_content.add(cal_wrap)
+
+        xy_label = toga.Label(
+            "Averages appear while the timer runs.",
+            style=pack_calibration_averages_line(padding_bottom=8, text_align=CENTER),
+        )
+        cal_content.add(xy_label)
+
+        return CalibrationViewRefs(
+            instruction_label=instruction_label,
+            start_button=start_button,
+            timer_label=timer_label,
+            live_readout=live_readout,
+            motion_value_labels=motion_value_labels,
+            xy_label=xy_label,
+        )
+
+    def _build_calibration_review_screen(self, review_content: toga.Box) -> CalibrationReviewViewRefs:
+        """Assemble review labels (action buttons are laid out on ``panel_host``)."""
+        review_content.add(
+            toga.Label(
+                "Verify configuration",
+                style=pack_review_section_title(padding_bottom=8, text_align=CENTER),
+            )
+        )
+        ay_l, az_l = _MOTION_AXIS_YZ
+        xy_label = toga.Label(
+            f"{ay_l}=0.00 · {az_l}=0.00",
+            style=Pack(padding_bottom=6, font_size=14, text_align=CENTER),
+        )
+        review_content.add(xy_label)
+        neutral_label = toga.Label(
+            f"Neutral {ay_l}={self.pending_neutral_x:.4f} · {az_l}={self.pending_neutral_y:.4f}",
+            style=pack_muted_body(padding_bottom=10, text_align=CENTER),
+        )
+        review_content.add(neutral_label)
+        return CalibrationReviewViewRefs(xy_label=xy_label, neutral_label=neutral_label)
 
     def show_calibration_view(self, widget: Optional[toga.Widget] = None) -> None:
-        self.current_view = "calibration"
+        self.current_view = AppView.CALIBRATION
         self._clear_panel_host()
         assert self.panel_host is not None
         ph = self.panel_host
@@ -900,65 +959,7 @@ class EmotivBridgeApp(toga.App):
             )
         )
         ph.add(cal_content)
-
-        cal_content.add(
-            toga.Label(
-                "Calibration",
-                style=Pack(
-                    font_size=22,
-                    font_weight="bold",
-                    padding_bottom=4,
-                    text_align=CENTER,
-                ),
-            )
-        )
-        self.calibration_instruction_label = toga.Label(
-            "After you start, hold a comfortable neutral head pose for the full 10 seconds.",
-            style=Pack(color="#6b7280", padding_bottom=4, text_align=CENTER),
-        )
-        cal_content.add(self.calibration_instruction_label)
-        cal_content.add(
-            toga.Label(
-                "Neutral is set to the average position recorded during the timer.",
-                style=Pack(color="#6b7280", font_size=12, padding_bottom=8, text_align=CENTER),
-            )
-        )
-
-        self.calibration_start_button = toga.Button(
-            "Start 10 s timer",
-            on_press=self._on_calibration_timer_button,
-            style=_action_btn_style(),
-        )
-        cal_content.add(self.calibration_start_button)
-
-        self.timer_label = toga.Label(
-            "—",
-            style=Pack(
-                font_size=40,
-                font_weight="bold",
-                color="#14b8a6",
-                padding_bottom=6,
-                text_align=CENTER,
-            ),
-        )
-        cal_content.add(self.timer_label)
-
-        self.calibration_live_readout, self._calibration_motion_value_labels = (
-            self._build_live_motion_readout_row()
-        )
-        cal_wrap = toga.Box(
-            style=Pack(direction=ROW, alignment=CENTER, padding_bottom=6),
-        )
-        cal_wrap.add(toga.Box(style=Pack(flex=1)))
-        cal_wrap.add(self.calibration_live_readout)
-        cal_wrap.add(toga.Box(style=Pack(flex=1)))
-        cal_content.add(cal_wrap)
-
-        self.calibration_xy_label = toga.Label(
-            "Averages appear while the timer runs.",
-            style=Pack(color="#4b5563", font_size=14, padding_bottom=8, text_align=CENTER),
-        )
-        cal_content.add(self.calibration_xy_label)
+        self._calibration_refs = self._build_calibration_screen(cal_content)
 
         cancel_row = toga.Box(
             style=Pack(direction=ROW, alignment=CENTER, padding_top=8, padding_bottom=8)
@@ -969,7 +970,7 @@ class EmotivBridgeApp(toga.App):
             toga.Button(
                 "Cancel",
                 on_press=lambda w: self.show_main_view(),
-                style=_action_btn_style(),
+                style=pack_action_button(),
             )
         )
         cancel_row.add(toga.Box(style=Pack(flex=1)))
@@ -977,7 +978,7 @@ class EmotivBridgeApp(toga.App):
         self._sync_crosshair_visibility()
 
     def show_calibration_review_view(self) -> None:
-        self.current_view = "calibration_review"
+        self.current_view = AppView.CALIBRATION_REVIEW
         self.calibration_active = False
         self._clear_panel_host()
         assert self.panel_host is not None
@@ -995,23 +996,7 @@ class EmotivBridgeApp(toga.App):
             )
         )
         ph.add(review_content)
-        review_content.add(
-            toga.Label(
-                "Verify configuration",
-                style=Pack(font_size=20, font_weight="bold", padding_bottom=8, text_align=CENTER),
-            )
-        )
-        ay_l, az_l = _MOTION_AXIS_YZ
-        self.review_xy_label = toga.Label(
-            f"{ay_l}=0.00 · {az_l}=0.00",
-            style=Pack(padding_bottom=6, font_size=14, text_align=CENTER),
-        )
-        review_content.add(self.review_xy_label)
-        self.review_neutral_label = toga.Label(
-            f"Neutral {ay_l}={self.pending_neutral_x:.4f} · {az_l}={self.pending_neutral_y:.4f}",
-            style=Pack(color="#6b7280", padding_bottom=10, text_align=CENTER),
-        )
-        review_content.add(self.review_neutral_label)
+        self._calibration_review_refs = self._build_calibration_review_screen(review_content)
 
         row = toga.Box(style=Pack(direction=ROW, alignment=CENTER, padding_top=16, padding_left=12, padding_right=12))
         ph.add(row)
@@ -1020,17 +1005,17 @@ class EmotivBridgeApp(toga.App):
             toga.Button(
                 "Cancel",
                 on_press=lambda w: self.show_main_view(),
-                style=_action_btn_style(gap_after=True),
+                style=pack_action_button(gap_after=True),
             )
         )
         row.add(
             toga.Button(
                 "Retry",
                 on_press=lambda w: self.show_calibration_view(),
-                style=_action_btn_style(gap_after=True),
+                style=pack_action_button(gap_after=True),
             )
         )
-        row.add(toga.Button("Save", on_press=lambda w: self.save_calibration(), style=_action_btn_style()))
+        row.add(toga.Button("Save", on_press=lambda w: self.save_calibration(), style=pack_action_button()))
         row.add(toga.Box(style=Pack(flex=1)))
 
         self._sync_crosshair_visibility()
@@ -1041,202 +1026,8 @@ class EmotivBridgeApp(toga.App):
         save_config(self.config_data)
         self.show_main_view()
 
-    def _settings_tab_save_row(self, on_save: Callable[[Optional[toga.Widget]], None]) -> toga.Box:
-        row = toga.Box(style=Pack(direction=ROW, padding_top=20, padding_bottom=12))
-        row.add(toga.Box(style=Pack(flex=1)))
-        row.add(toga.Button("Save", on_press=on_save, style=_action_btn_style()))
-        return row
-
-    def _build_general_tab(self) -> toga.Box:
-        box = toga.Box(
-            style=Pack(direction=COLUMN, padding_top=12, padding_bottom=12, padding_left=12, padding_right=12, flex=1),
-        )
-
-        debug_sw = toga.Switch(
-            "Debug mode (update diagnostics)",
-            value=self.config_data.debug_mode,
-        )
-        box.add(debug_sw)
-        box.add(
-            toga.Label(
-                "When on, writes detailed logs during in-app update install (Python + updater script).",
-                style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
-            )
-        )
-
-        box.add(
-            toga.Button(
-                "Environment variables…",
-                on_press=lambda w: self.show_env_settings_view(),
-                style=Pack(padding_top=4),
-            )
-        )
-
-        ver_box = toga.Box(style=Pack(direction=COLUMN, padding_top=14))
-        box.add(ver_box)
-        ver_box.add(toga.Label(f"Version {get_app_version()}", style=Pack(color="#6b7280", font_size=10)))
-        ver_box.add(toga.Button("Check for updates", on_press=self._on_check_for_updates))
-
-        box.add(toga.Box(style=Pack(flex=1)))
-
-        def save_general(widget: Optional[toga.Widget] = None) -> None:
-            self.config_data.debug_mode = bool(debug_sw.value)
-            save_config(self.config_data)
-            self.show_main_view()
-
-        box.add(self._settings_tab_save_row(save_general))
-        return box
-
-    def _build_motion_tab(self) -> toga.Box:
-        box = toga.Box(
-            style=Pack(direction=COLUMN, padding_top=12, padding_bottom=12, padding_left=12, padding_right=12, flex=1),
-        )
-
-        kb_sw = toga.Switch(
-            "Keyboard presses",
-            value=self.config_data.keyboard_enabled,
-        )
-        box.add(kb_sw)
-        box.add(
-            toga.Label(
-                "Shortcut: Ctrl + Shift + K · or Ctrl + Alt + K if the first is in use",
-                style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
-            )
-        )
-
-        tg_sw = toga.Switch(
-            "Single threshold for all movements",
-            value=self.config_data.threshold_global,
-        )
-        box.add(tg_sw)
-
-        threshold_host = toga.Box(style=Pack(direction=COLUMN))
-        box.add(threshold_host)
-
-        global_row = toga.Box(style=Pack(direction=ROW, padding_top=6))
-        global_row.add(
-            toga.Label(
-                "Movement threshold (ACC units, ACCY/ACCZ)",
-                style=Pack(flex=1),
-            )
-        )
-        thr_global = toga.NumberInput(
-            min=0.01,
-            max=1.0,
-            step=0.01,
-            value=self.config_data.threshold,
-            style=Pack(width=100),
-        )
-        global_row.add(thr_global)
-
-        per_box = toga.Box(style=Pack(direction=COLUMN))
-        per_inputs: dict[str, toga.NumberInput] = {}
-        for movement in MOVEMENTS:
-            row = toga.Box(style=Pack(direction=ROW, padding_top=4))
-            row.add(
-                toga.Label(
-                    f"{MOVEMENTS[movement]['ui_name']} threshold ({MOVEMENTS[movement]['label']}, ACC)",
-                    style=Pack(flex=1),
-                )
-            )
-            ni = toga.NumberInput(
-                min=0.01,
-                max=1.0,
-                step=0.01,
-                value=self.config_data.movement_thresholds[movement],
-                style=Pack(width=100),
-            )
-            row.add(ni)
-            per_box.add(row)
-            per_inputs[movement] = ni
-
-        def refresh_threshold_mode(*_: Any) -> None:
-            threshold_host.clear()
-            if tg_sw.value:
-                threshold_host.add(global_row)
-            else:
-                threshold_host.add(per_box)
-
-        tg_sw.on_change = lambda w: refresh_threshold_mode()
-        refresh_threshold_mode()
-
-        box.add(toga.Box(style=Pack(flex=1)))
-
-        def save_motion(widget: Optional[toga.Widget] = None) -> None:
-            self.config_data.keyboard_enabled = bool(kb_sw.value)
-            self.config_data.threshold_global = bool(tg_sw.value)
-            self.config_data.threshold = float(thr_global.value)
-            for m, inp in per_inputs.items():
-                self.config_data.movement_thresholds[m] = float(inp.value)
-            save_config(self.config_data)
-            self.show_main_view()
-
-        box.add(self._settings_tab_save_row(save_motion))
-        return box
-
-    def _build_mental_tab(self) -> toga.Box:
-        box = toga.Box(
-            style=Pack(direction=COLUMN, padding_top=12, padding_bottom=12, padding_left=12, padding_right=12, flex=1),
-        )
-
-        kb_com_sw = toga.Switch(
-            "Keyboard presses for mental commands",
-            value=self.config_data.keyboard_com_enabled,
-        )
-        box.add(kb_com_sw)
-        box.add(
-            toga.Label(
-                "Only applies when keyboard presses are on. Tilt keys are unchanged.",
-                style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
-            )
-        )
-
-        box.add(toga.Label("Mental command power threshold", style=Pack(padding_top=12)))
-        com_row = toga.Box(style=Pack(direction=ROW))
-        com_row.add(toga.Box(style=Pack(flex=1)))
-        com_thr = toga.NumberInput(
-            min=0,
-            max=1,
-            step=0.05,
-            value=self.config_data.com_power_threshold,
-            style=Pack(width=100),
-        )
-        com_row.add(com_thr)
-        box.add(com_row)
-
-        box.add(
-            toga.Label(
-                "Mental command keys (held while COM power is above threshold)",
-                style=Pack(color="#6b7280", font_size=10, padding_top=12, padding_bottom=4),
-            )
-        )
-        com_entries: dict[str, toga.TextInput] = {}
-        for cmd in COM_MAPPED_MENTAL_ACTIONS:
-            row = toga.Box(style=Pack(direction=ROW, padding_top=4))
-            row.add(toga.Label(cmd, style=Pack(width=80)))
-            te = toga.TextInput(
-                value=str(self.config_data.com_key_bindings.get(cmd, "")),
-                style=Pack(flex=1),
-            )
-            row.add(te)
-            box.add(row)
-            com_entries[cmd] = te
-
-        box.add(toga.Box(style=Pack(flex=1)))
-
-        def save_mental(widget: Optional[toga.Widget] = None) -> None:
-            self.config_data.keyboard_com_enabled = bool(kb_com_sw.value)
-            self.config_data.com_power_threshold = float(com_thr.value)
-            for cmd in COM_MAPPED_MENTAL_ACTIONS:
-                self.config_data.com_key_bindings[cmd] = com_entries[cmd].value.strip()
-            save_config(self.config_data)
-            self.show_main_view()
-
-        box.add(self._settings_tab_save_row(save_mental))
-        return box
-
     def show_settings_view(self, widget: Optional[toga.Widget] = None) -> None:
-        self.current_view = "settings"
+        self.current_view = AppView.SETTINGS
         self._clear_panel_host()
         assert self.panel_host is not None
         ph = self.panel_host
@@ -1256,7 +1047,7 @@ class EmotivBridgeApp(toga.App):
         title_row.add(
             toga.Label(
                 "Settings",
-                style=Pack(font_size=22, font_weight="bold", flex=1),
+                style=pack_section_title(flex=1),
             )
         )
         title_row.add(
@@ -1268,11 +1059,34 @@ class EmotivBridgeApp(toga.App):
         )
         screen.add(title_row)
 
+        def persist_and_main() -> None:
+            save_config(self.config_data)
+            self.show_main_view()
+
+        def on_save_debug(debug: bool) -> None:
+            self.config_data.debug_mode = debug
+            save_config(self.config_data)
+            self.show_main_view()
+
         tabs = toga.OptionContainer(
             content=[
-                ("General", self._build_general_tab()),
-                ("Motion", self._build_motion_tab()),
-                ("Mental", self._build_mental_tab()),
+                (
+                    "General",
+                    build_general_tab(
+                        config_data=self.config_data,
+                        on_save_debug=on_save_debug,
+                        on_open_env=self.show_env_settings_view,
+                        on_check_updates=self._on_check_for_updates,
+                    ),
+                ),
+                (
+                    "Motion",
+                    build_motion_tab(config_data=self.config_data, on_save=persist_and_main),
+                ),
+                (
+                    "Mental",
+                    build_mental_tab(config_data=self.config_data, on_save=persist_and_main),
+                ),
             ],
             style=Pack(flex=1),
         )
@@ -1283,36 +1097,20 @@ class EmotivBridgeApp(toga.App):
         self._sync_crosshair_visibility()
 
     def show_env_settings_view(self, widget: Optional[toga.Widget] = None) -> None:
-        self.current_view = "env_settings"
+        self.current_view = AppView.ENV_SETTINGS
         self._clear_panel_host()
         assert self.panel_host is not None
         ph = self.panel_host
 
-        ph.add(toga.Label("Environment variables", style=Pack(font_size=22, font_weight="bold", padding_top=16, padding_bottom=8)))
-        ph.add(
-            toga.Label(
-                f"Values are saved to {CONFIG_PATH.name} with your other settings. "
-                "Saving reconnects Cortex with the updated connection.",
-                style=Pack(color="#6b7280", font_size=10, text_align="center", padding_bottom=10),
-            )
-        )
+        title, blurb = env_intro_labels()
+        ph.add(title)
+        ph.add(blurb)
 
-        inner = toga.Box(style=Pack(direction=COLUMN, padding=8))
-        scroll = toga.ScrollContainer(content=inner, style=Pack(flex=1, height=260), horizontal=False, vertical=True)
+        scroll, env_inputs = build_env_settings_scroll(config_data=self.config_data)
         ph.add(scroll)
 
-        initial = app_env_form_values(self.config_data)
-        env_inputs: dict[str, toga.TextInput] = {}
-        for key in APP_ENV_UI_KEYS:
-            row = toga.Box(style=Pack(direction=ROW, padding_top=6))
-            row.add(toga.Label(key, style=Pack(width=180)))
-            ti = toga.TextInput(value=initial[key], style=Pack(flex=1))
-            row.add(ti)
-            inner.add(row)
-            env_inputs[key] = ti
-
         def save_env(widget: Optional[toga.Widget] = None) -> None:
-            raw = {k: env_inputs[k].value.strip() for k in APP_ENV_UI_KEYS}
+            raw = {k: env_inputs[k].value.strip() for k in env_inputs}
             try:
                 int(raw["EMOTIV_DEBIT"])
             except ValueError:
@@ -1333,10 +1131,10 @@ class EmotivBridgeApp(toga.App):
             toga.Button(
                 "Back",
                 on_press=lambda w: self.show_settings_view(),
-                style=_action_btn_style(gap_after=True),
+                style=pack_action_button(gap_after=True),
             )
         )
-        br.add(toga.Button("Save", on_press=save_env, style=_action_btn_style()))
+        br.add(toga.Button("Save", on_press=save_env, style=pack_action_button()))
 
         self._sync_crosshair_visibility()
 
@@ -1411,12 +1209,12 @@ class EmotivBridgeApp(toga.App):
         )
 
     def get_active_neutral_x(self) -> Optional[float]:
-        if self.current_view == "calibration_review" and self.pending_neutral_x is not None:
+        if self.current_view == AppView.CALIBRATION_REVIEW and self.pending_neutral_x is not None:
             return self.pending_neutral_x
         return self.config_data.neutral_x
 
     def get_active_neutral_y(self) -> Optional[float]:
-        if self.current_view == "calibration_review" and self.pending_neutral_y is not None:
+        if self.current_view == AppView.CALIBRATION_REVIEW and self.pending_neutral_y is not None:
             return self.pending_neutral_y
         return self.config_data.neutral_y
 
@@ -1425,7 +1223,7 @@ class EmotivBridgeApp(toga.App):
             return
         if getattr(self.cross_canvas, "parent", None) is None:
             return
-        if self.current_view in ("settings", "env_settings"):
+        if self.current_view in (AppView.SETTINGS, AppView.ENV_SETTINGS):
             return
         width = float(self._cross_w)
         height = float(self._cross_h)
@@ -1510,19 +1308,41 @@ class EmotivBridgeApp(toga.App):
             border.rect(qx, qy, side, side)
 
     def update_ui(self) -> None:
+        self._update_ui_crosshair_and_pad_layout()
+        self._update_ui_motion_readouts_and_review_line()
+        mv = self._main_view
+        self._update_ui_main_dashboard(mv)
+        self._update_ui_calibration_timer()
+
+    def _update_ui_crosshair_and_pad_layout(self) -> None:
         self.draw_crosshair()
         self._sync_movement_pad_cell_layout()
+        motion_pad = self.map_motion(self.current_x, self.current_y)
+        display_movements = motion_pad | self.com_pad_movements
+        for movement, btn in self.movement_buttons.items():
+            btn.text = self._movement_pad_label_text(movement)
+            self._apply_movement_pad_style(btn, movement in display_movements)
 
-        ay_l, az_l = _MOTION_AXIS_YZ
-        xy_text = f"{ay_l}={self.current_x:.4f} · {az_l}={self.current_y:.4f}"
+    def _update_ui_motion_readouts_and_review_line(self) -> None:
         mv = self._main_view
         if mv is not None and mv.main_motion_readout is not None:
             self._sync_live_motion_readout(mv.motion_readout_value_labels)
-        if self.calibration_live_readout is not None:
-            self._sync_live_motion_readout(self._calibration_motion_value_labels)
-        if self.review_xy_label is not None:
-            self.review_xy_label.text = xy_text
+        cr = self._calibration_refs
+        if cr is not None:
+            self._sync_live_motion_readout(cr.motion_value_labels)
+        rr = self._calibration_review_refs
+        if rr is not None:
+            ay_l, az_l = _MOTION_AXIS_YZ
+            rr.xy_label.text = f"{ay_l}={self.current_x:.4f} · {az_l}={self.current_y:.4f}"
 
+    def _tick_win32_connection_busy_fallback(self, mv: Optional[MainViewRefs]) -> None:
+        fb = mv.connection_busy_fallback if mv else None
+        if fb is None or not self._main_connection_busy:
+            return
+        self._busy_fallback_tick += 1
+        fb.text = ("", ".", "..", "...")[self._busy_fallback_tick % 4]
+
+    def _update_ui_main_dashboard(self, mv: Optional[MainViewRefs]) -> None:
         if mv is not None and mv.keyboard_label is not None:
             mv.keyboard_label.text = (
                 "Keyboard presses: on"
@@ -1530,7 +1350,9 @@ class EmotivBridgeApp(toga.App):
                 else "Keyboard presses: off"
             )
 
-        if self.current_view == "main" and mv is not None and mv.com_power_labels:
+        self._tick_win32_connection_busy_fallback(mv)
+
+        if self.current_view == AppView.MAIN and mv is not None and mv.com_power_labels:
             thr = float(self.config_data.com_power_threshold)
             if mv.com_threshold_hint is not None:
                 mv.com_threshold_hint.text = f"Activate after ≥ {thr:.2f}"
@@ -1562,106 +1384,85 @@ class EmotivBridgeApp(toga.App):
                 else:
                     lab.style.color = "#0f766e" if p >= thr else "#111827"
 
-        motion_pad = self.map_motion(self.current_x, self.current_y)
-        display_movements = motion_pad | self.com_pad_movements
-        for movement, btn in self.movement_buttons.items():
-            btn.text = self._movement_pad_label_text(movement)
-            self._apply_movement_pad_style(btn, movement in display_movements)
+    def _update_ui_calibration_timer(self) -> None:
+        cr = self._calibration_refs
+        if not self.calibration_active or self.calibration_started_at is None or cr is None:
+            return
+        elapsed = time.time() - self.calibration_started_at
+        remaining = max(0, 10 - elapsed)
 
-        if self.calibration_active and self.calibration_started_at is not None:
-            elapsed = time.time() - self.calibration_started_at
-            remaining = max(0, 10 - elapsed)
+        cr.timer_label.text = str(int(remaining) + 1 if remaining > 0 else 0)
 
-            if self.timer_label is not None:
-                self.timer_label.text = str(int(remaining) + 1 if remaining > 0 else 0)
+        if self.calibration_samples:
+            n = len(self.calibration_samples)
+            avg_ax = sum(t[0] for t in self.calibration_samples) / n
+            avg_ay = sum(t[1] for t in self.calibration_samples) / n
+            avg_az = sum(t[2] for t in self.calibration_samples) / n
+            cr.xy_label.text = (
+                f"avg ACC X={avg_ax:.4f} · ACC Y={avg_ay:.4f} · ACC Z={avg_az:.4f}"
+            )
 
-            if self.calibration_samples and self.calibration_xy_label is not None:
-                n = len(self.calibration_samples)
-                avg_ax = sum(t[0] for t in self.calibration_samples) / n
-                avg_ay = sum(t[1] for t in self.calibration_samples) / n
-                avg_az = sum(t[2] for t in self.calibration_samples) / n
-                self.calibration_xy_label.text = (
-                    f"avg ACC X={avg_ax:.4f} · ACC Y={avg_ay:.4f} · ACC Z={avg_az:.4f}"
+        if elapsed >= 10:
+            if not self.calibration_samples:
+                self.main_window.error_dialog(
+                    "Error",
+                    "No motion data received during calibration.",
                 )
+                self.show_main_view()
+                return
 
-            if elapsed >= 10:
-                if not self.calibration_samples:
-                    self.main_window.error_dialog(
-                        "Error",
-                        "No motion data received during calibration.",
-                    )
-                    self.show_main_view()
-                    return
-
-                self.pending_neutral_x = (
-                    sum(t[1] for t in self.calibration_samples) / len(self.calibration_samples)
-                )
-                self.pending_neutral_y = (
-                    sum(t[2] for t in self.calibration_samples) / len(self.calibration_samples)
-                )
-                self.show_calibration_review_view()
+            self.pending_neutral_x = (
+                sum(t[1] for t in self.calibration_samples) / len(self.calibration_samples)
+            )
+            self.pending_neutral_y = (
+                sum(t[2] for t in self.calibration_samples) / len(self.calibration_samples)
+            )
+            self.show_calibration_review_view()
 
     def _tick_once(self) -> None:
-        try:
-            while True:
-                msg = self.stream_queue.get_nowait()
-                self.process_stream_message(msg)
-        except Empty:
-            pass
+        drain_queue(self.stream_queue, self.process_stream_message)
 
-        try:
-            while True:
-                cmd = self._hotkey_control_queue.get_nowait()
-                if cmd == "fallback_pynput":
-                    self._install_pynput_hotkey()
-                elif cmd == "hint_ctrl_alt_k":
-                    self.status_queue.put(
-                        "Keyboard shortcut is Ctrl+Alt+K (Ctrl+Shift+K is reserved by another app)."
-                    )
-        except Empty:
-            pass
+        def handle_hotkey_ctrl(cmd: str) -> None:
+            if cmd == "fallback_pynput":
+                self._install_pynput_hotkey()
+            elif cmd == "hint_ctrl_alt_k":
+                self.status_queue.put(
+                    "Keyboard shortcut is Ctrl+Alt+K (Ctrl+Shift+K is reserved by another app)."
+                )
 
-        try:
-            while True:
-                self.keyboard_shortcut_queue.get_nowait()
-                self._toggle_keyboard_via_shortcut()
-        except Empty:
-            pass
+        drain_queue(self._hotkey_control_queue, handle_hotkey_ctrl)
+        drain_queue(self.keyboard_shortcut_queue, lambda _: self._toggle_keyboard_via_shortcut())
 
-        try:
-            while True:
-                status = self.status_queue.get_nowait()
-                if not status.startswith("Keyboard presses ") and not status.startswith(
-                    "Keyboard shortcut is "
-                ):
-                    self._last_cortex_status = status
-                mv = self._main_view
-                if mv is not None and mv.status_label is not None:
-                    mv.status_label.text = status
-                    self._sync_main_connection_activity(status)
-                if _status_clears_connection_error_ui(status):
-                    self.connection_failed = False
-                    if mv is not None:
-                        if mv.error_label is not None:
-                            mv.error_label.text = ""
-                        if mv.retry_button is not None:
-                            mv.retry_button.style.visibility = HIDDEN
-        except Empty:
-            pass
-
-        try:
-            while True:
-                error = self.error_queue.get_nowait()
-                mv = self._main_view
+        def handle_status(status: str) -> None:
+            if not status.startswith("Keyboard presses ") and not status.startswith(
+                "Keyboard shortcut is "
+            ):
+                self._last_cortex_status = status
+            mv = self._main_view
+            if mv is not None and mv.status_label is not None:
+                mv.status_label.text = status
+                self._sync_main_connection_activity(status)
+            if _status_clears_connection_error_ui(status):
+                self.connection_failed = False
                 if mv is not None:
                     if mv.error_label is not None:
-                        mv.error_label.text = error
+                        mv.error_label.text = ""
                     if mv.retry_button is not None:
-                        mv.retry_button.style.visibility = VISIBLE
-                print(error)
-                self.connection_failed = True
-        except Empty:
-            pass
+                        mv.retry_button.style.visibility = HIDDEN
+
+        drain_queue(self.status_queue, handle_status)
+
+        def handle_error(error: str) -> None:
+            mv = self._main_view
+            if mv is not None:
+                if mv.error_label is not None:
+                    mv.error_label.text = error
+                if mv.retry_button is not None:
+                    mv.retry_button.style.visibility = VISIBLE
+            print(error)
+            self.connection_failed = True
+
+        drain_queue(self.error_queue, handle_error)
 
         self.update_ui()
 
