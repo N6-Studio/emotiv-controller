@@ -847,8 +847,8 @@ class EmotivBridgeApp(toga.App):
             style=Pack(
                 direction=COLUMN,
                 alignment=CENTER,
-                padding_top=12,
-                padding_bottom=8,
+                padding_top=8,
+                padding_bottom=4,
                 padding_left=16,
                 padding_right=16,
             )
@@ -861,20 +861,20 @@ class EmotivBridgeApp(toga.App):
                 style=Pack(
                     font_size=22,
                     font_weight="bold",
-                    padding_bottom=8,
+                    padding_bottom=4,
                     text_align=CENTER,
                 ),
             )
         )
         self.calibration_instruction_label = toga.Label(
             "After you start, hold a comfortable neutral head pose for the full 10 seconds.",
-            style=Pack(color="#6b7280", padding_bottom=6, text_align=CENTER),
+            style=Pack(color="#6b7280", padding_bottom=4, text_align=CENTER),
         )
         cal_content.add(self.calibration_instruction_label)
         cal_content.add(
             toga.Label(
                 "Neutral is set to the average position recorded during the timer.",
-                style=Pack(color="#6b7280", font_size=12, padding_bottom=12, text_align=CENTER),
+                style=Pack(color="#6b7280", font_size=12, padding_bottom=8, text_align=CENTER),
             )
         )
 
@@ -891,7 +891,7 @@ class EmotivBridgeApp(toga.App):
                 font_size=40,
                 font_weight="bold",
                 color="#14b8a6",
-                padding_bottom=10,
+                padding_bottom=6,
                 text_align=CENTER,
             ),
         )
@@ -916,7 +916,7 @@ class EmotivBridgeApp(toga.App):
         cal_content.add(self.calibration_xy_label)
 
         cancel_row = toga.Box(
-            style=Pack(direction=ROW, alignment=CENTER, padding_top=12, padding_bottom=12)
+            style=Pack(direction=ROW, alignment=CENTER, padding_top=8, padding_bottom=8)
         )
         ph.add(cancel_row)
         cancel_row.add(toga.Box(style=Pack(flex=1)))
