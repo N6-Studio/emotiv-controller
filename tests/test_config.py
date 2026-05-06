@@ -19,55 +19,73 @@ def test_appconfig_debug_mode_default():
     assert AppConfig().debug_mode is False
 
 
-def test_appconfig_invert_axes_default_off():
+def test_appconfig_quaternion_map_default_identity():
     from app import AppConfig
 
     cfg = AppConfig()
-    assert cfg.invert_pitch is False
-    assert cfg.invert_roll is False
-    assert cfg.swap_pitch_roll_axes is True
+    assert cfg.quaternion_map_w == 0
+    assert cfg.quaternion_map_x == 1
+    assert cfg.quaternion_map_y == 2
+    assert cfg.quaternion_map_z == 3
 
 
-def test_load_save_invert_axes_round_trip(monkeypatch, tmp_path):
+def test_appconfig_quaternion_map_invalid_reset_to_identity():
+    from app import AppConfig
+
+    cfg = AppConfig(
+        quaternion_map_w=0,
+        quaternion_map_x=0,
+        quaternion_map_y=2,
+        quaternion_map_z=3,
+    )
+    assert cfg.quaternion_map_w == 0
+    assert cfg.quaternion_map_x == 1
+    assert cfg.quaternion_map_y == 2
+    assert cfg.quaternion_map_z == 3
+
+
+def test_load_save_quaternion_map_round_trip(monkeypatch, tmp_path):
     import app as app_module
 
     path = tmp_path / "config.json"
     monkeypatch.setattr(app_module, "CONFIG_PATH", path)
     original = app_module.AppConfig(
-        invert_pitch=True,
-        invert_roll=True,
-        swap_pitch_roll_axes=False,
+        quaternion_map_w=3,
+        quaternion_map_x=0,
+        quaternion_map_y=1,
+        quaternion_map_z=2,
     )
     app_module.save_config(original)
     loaded = app_module.load_config()
-    assert loaded.invert_pitch is True
-    assert loaded.invert_roll is True
-    assert loaded.swap_pitch_roll_axes is False
+    assert loaded.quaternion_map_w == 3
+    assert loaded.quaternion_map_x == 0
+    assert loaded.quaternion_map_y == 1
+    assert loaded.quaternion_map_z == 2
     raw = json.loads(path.read_text(encoding="utf-8"))
-    assert raw["invert_pitch"] is True
-    assert raw["invert_roll"] is True
-    assert raw["swap_pitch_roll_axes"] is False
+    assert raw["quaternion_map_w"] == 3
+    assert raw["quaternion_map_x"] == 0
+    assert raw["quaternion_map_y"] == 1
+    assert raw["quaternion_map_z"] == 2
 
 
-def test_minimal_config_without_invert_keys_gets_them_on_save(monkeypatch, tmp_path):
-    """Older config files omitting invert_* / swap_* still round-trip with keys after save."""
+def test_minimal_config_without_quaternion_keys_gets_identity_on_save(monkeypatch, tmp_path):
+    """Older config files omitting quaternion_map_* still round-trip with keys after save."""
     import app as app_module
 
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"threshold": 7.0}), encoding="utf-8")
     monkeypatch.setattr(app_module, "CONFIG_PATH", path)
     cfg = app_module.load_config()
-    assert cfg.invert_pitch is False
-    assert cfg.invert_roll is False
-    assert cfg.swap_pitch_roll_axes is True
+    assert cfg.quaternion_map_w == 0
+    assert cfg.quaternion_map_x == 1
+    assert cfg.quaternion_map_y == 2
+    assert cfg.quaternion_map_z == 3
     app_module.save_config(cfg)
     raw = json.loads(path.read_text(encoding="utf-8"))
-    assert "invert_pitch" in raw
-    assert "invert_roll" in raw
-    assert "swap_pitch_roll_axes" in raw
-    assert raw["invert_pitch"] is False
-    assert raw["invert_roll"] is False
-    assert raw["swap_pitch_roll_axes"] is True
+    assert "quaternion_map_w" in raw
+    assert "quaternion_map_x" in raw
+    assert "quaternion_map_y" in raw
+    assert "quaternion_map_z" in raw
 
 
 def test_load_save_round_trip(monkeypatch, tmp_path):
@@ -89,11 +107,11 @@ def test_load_save_round_trip(monkeypatch, tmp_path):
     assert loaded.keyboard_enabled is True
     assert loaded.threshold_global is False
     assert loaded.debug_mode is True
-    assert loaded.swap_pitch_roll_axes is True
+    assert loaded.quaternion_map_w == 0
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["neutral_x"] == 1.5
     assert raw["debug_mode"] is True
-    assert raw["swap_pitch_roll_axes"] is True
+    assert raw["quaternion_map_w"] == 0
 
 
 def test_load_config_corrupt_json(monkeypatch, tmp_path):

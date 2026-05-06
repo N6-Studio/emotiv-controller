@@ -7,6 +7,7 @@ import pytest
 from core import (
     _MOT_COLS_12,
     build_mot_index,
+    hamilton_wxyz_from_stream_quat,
     mot_quaternion,
     mot_to_tilt_xy,
     quaternion_to_pitch_roll,
@@ -15,6 +16,36 @@ from core import (
 
 def test_build_mot_index():
     assert build_mot_index(["A", "B"]) == {"A": 0, "B": 1}
+
+
+def test_hamilton_wxyz_from_stream_quat_permutation():
+    q = (1.0, 2.0, 3.0, 4.0)
+    assert hamilton_wxyz_from_stream_quat(q, (3, 2, 1, 0)) == (4.0, 3.0, 2.0, 1.0)
+
+
+def test_mot_to_tilt_xy_stream_index_mapping():
+    mot = [
+        48,
+        0,
+        0.735341,
+        0.255615,
+        0.627441,
+        -0.015869,
+        0.948257,
+        -0.354986,
+        -0.083497,
+        -44.656766,
+        -86.970985,
+        23.221568,
+    ]
+    cols = list(_MOT_COLS_12)
+    iwxyz = (3, 0, 1, 2)
+    raw = (0.735341, 0.255615, 0.627441, -0.015869)
+    w, x, y, z = hamilton_wxyz_from_stream_quat(raw, iwxyz)
+    pr = quaternion_to_pitch_roll(w, x, y, z)
+    expect = (math.degrees(pr[0]), math.degrees(pr[1]))
+    got = mot_to_tilt_xy(mot, cols, stream_index_for_wxyz=iwxyz)
+    assert got == pytest.approx(expect)
 
 
 def test_quaternion_identity():

@@ -120,11 +120,11 @@ class AppConfig:
     movement_thresholds: dict = field(default_factory=dict)
     keyboard_enabled: bool = False
     keyboard_com_enabled: bool = False
-    # Negate quaternion-derived pitch / roll before thresholds and calibration (default off).
-    invert_pitch: bool = False
-    invert_roll: bool = False
-    # If True, roll feeds motion X (forward/back) and pitch feeds Y (left/right); if False, pitch→X and roll→Y.
-    swap_pitch_roll_axes: bool = True
+    # Each Hamilton component (w,x,y,z) is taken from Cortex quaternion slot Q0..Q3 (indices 0..3).
+    quaternion_map_w: int = 0
+    quaternion_map_x: int = 1
+    quaternion_map_y: int = 2
+    quaternion_map_z: int = 3
     debug_mode: bool = False
     com_power_threshold: float = DEFAULT_COM_POWER_THRESHOLD
     key_bindings: dict = None
@@ -161,11 +161,34 @@ class AppConfig:
                 else:
                     merged[cmd] = str(v).strip()
             self.com_key_bindings = merged
+        self._normalize_quaternion_map()
         if not isinstance(self.emotiv_debit, int):
             try:
                 self.emotiv_debit = int(str(self.emotiv_debit).strip())
             except (TypeError, ValueError):
                 self.emotiv_debit = 1
+
+    def _normalize_quaternion_map(self) -> None:
+        """Ensure quaternion indices are a permutation of ``{0,1,2,3}`` (Cortex Q0..Q3 slots)."""
+        raw = (
+            self.quaternion_map_w,
+            self.quaternion_map_x,
+            self.quaternion_map_y,
+            self.quaternion_map_z,
+        )
+        try:
+            idx = tuple(int(round(float(x))) for x in raw)
+        except (TypeError, ValueError):
+            idx = (0, 1, 2, 3)
+        else:
+            if len(idx) != 4 or len(set(idx)) != 4 or any(i not in (0, 1, 2, 3) for i in idx):
+                idx = (0, 1, 2, 3)
+        (
+            self.quaternion_map_w,
+            self.quaternion_map_x,
+            self.quaternion_map_y,
+            self.quaternion_map_z,
+        ) = idx
 
 
 def load_config() -> AppConfig:
@@ -193,10 +216,8 @@ def load_config() -> AppConfig:
 def save_config(config: AppConfig):
     """Write ``config`` to disk as JSON (full ``AppConfig`` snapshot via ``asdict``).
 
-    Every field on ``AppConfig`` is persisted, including ``invert_pitch``,
-    ``invert_roll``, and ``swap_pitch_roll_axes``, so any code path that calls
-    this (settings, calibration, keyboard shortcut toggle, env form) keeps
-    those flags in ``config.json``.
+    Every field on ``AppConfig`` is persisted, including ``quaternion_map_*``,
+    so any code path that calls this keeps quaternion slot mapping in ``config.json``.
     """
     path = _config_path()
     path.write_text(

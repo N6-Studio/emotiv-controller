@@ -1,8 +1,10 @@
 """Pure movement / mental-command logic (no UI, I/O, or hardware).
 
 Head-tilt for WASD movement is derived **exclusively** from the Cortex ``mot``
-stream's quaternion columns ``Q0, Q1, Q2, Q3`` (Hamilton convention
-``w, x, y, z``). Pitch drives forward/backward; roll drives left/right.
+stream's quaternion columns ``Q0, Q1, Q2, Q3``. They are rearranged into a
+Hamilton quaternion ``(w, x, y, z)`` (see :func:`hamilton_wxyz_from_stream_quat`)
+before :func:`quaternion_to_pitch_roll`. Pitch drives forward/backward; roll
+drives left/right.
 
 Older EMOTIV headsets that expose ``GYROX/Y/Z`` instead of quaternions are not
 supported for tilt computation here — they will fall through to the synthetic
@@ -16,6 +18,9 @@ from __future__ import annotations
 
 import math
 from typing import Any, Iterable
+
+# Which ``mot`` quaternion slot (0=Q0 … 3=Q3) feeds each Hamilton component when mapping is default identity.
+DEFAULT_STREAM_INDEX_FOR_WXYZ: tuple[int, int, int, int] = (0, 1, 2, 3)
 
 # Default Cortex ``mot`` layout when ``cols`` is unavailable (newer headsets: quaternion + ACC + MAG).
 _MOT_COLS_12 = (
@@ -50,10 +55,25 @@ def _float_at(mot: list[Any], i: int) -> float:
     return float(v)
 
 
+def hamilton_wxyz_from_stream_quat(
+    q_stream: tuple[float, float, float, float],
+    stream_index_for_wxyz: tuple[int, int, int, int],
+) -> tuple[float, float, float, float]:
+    """Build ``(w, x, y, z)`` from Cortex ``(Q0, Q1, Q2, Q3)`` order in ``q_stream``.
+
+    ``stream_index_for_wxyz`` is ``(i_w, i_x, i_y, i_z)`` with each index in
+    ``{0, 1, 2, 3}``, assigning which stream component feeds each Hamilton part.
+    Caller must ensure indices form a permutation (validated in app config).
+    """
+    iw, ix, iy, iz = stream_index_for_wxyz
+    q = q_stream
+    return (q[iw], q[ix], q[iy], q[iz])
+
+
 def quaternion_to_pitch_roll(
     q0: float, q1: float, q2: float, q3: float
 ) -> tuple[float, float]:
-    """Hamilton convention w, x, y, z = Q0..Q3. Returns (pitch, roll) in radians.
+    """Hamilton convention w, x, y, z. Returns (pitch, roll) in radians.
 
     Pitch is used for forward vs backward; roll for left vs right (``compute_motion_movements`` x/y).
     """
@@ -136,18 +156,25 @@ def _quat_tuple_from_mot(mot: list[Any], cols: list[str]) -> tuple[float, float,
     return (q0, q1, q2, q3)
 
 
-def _tilt_from_cols(mot: list[Any], cols: list[str]) -> tuple[float, float] | None:
+def _tilt_from_cols(
+    mot: list[Any],
+    cols: list[str],
+    *,
+    stream_index_for_wxyz: tuple[int, int, int, int] = DEFAULT_STREAM_INDEX_FOR_WXYZ,
+) -> tuple[float, float] | None:
     quat = _quat_tuple_from_mot(mot, cols)
     if quat is None:
         return None
-    q0, q1, q2, q3 = quat
-    p, r = quaternion_to_pitch_roll(q0, q1, q2, q3)
+    w, x, y, z = hamilton_wxyz_from_stream_quat(quat, stream_index_for_wxyz)
+    p, r = quaternion_to_pitch_roll(w, x, y, z)
     return math.degrees(p), math.degrees(r)
 
 
 def mot_to_tilt_xy(
     mot: list[Any],
     cols: list[str] | None,
+    *,
+    stream_index_for_wxyz: tuple[int, int, int, int] = DEFAULT_STREAM_INDEX_FOR_WXYZ,
 ) -> tuple[float, float]:
     """Map a Cortex ``mot`` array to ``(pitch°, roll°)`` for head lean / thresholds.
 
@@ -160,11 +187,13 @@ def mot_to_tilt_xy(
     if not mot or len(mot) < 2:
         return 0.0, 0.0
     if cols is not None:
-        out = _tilt_from_cols(mot, cols)
+        out = _tilt_from_cols(mot, cols, stream_index_for_wxyz=stream_index_for_wxyz)
         if out is not None:
             return out
     if len(mot) == 12:
-        out = _tilt_from_cols(mot, list(_MOT_COLS_12))
+        out = _tilt_from_cols(
+            mot, list(_MOT_COLS_12), stream_index_for_wxyz=stream_index_for_wxyz
+        )
         if out is not None:
             return out
     return float(mot[-2] or 0), float(mot[-1] or 0)

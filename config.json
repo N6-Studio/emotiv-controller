@@ -11,9 +11,10 @@
   },
   "keyboard_enabled": false,
   "keyboard_com_enabled": false,
-  "invert_pitch": false,
-  "invert_roll": false,
-  "swap_pitch_roll_axes": true,
+  "quaternion_map_w": 0,
+  "quaternion_map_x": 1,
+  "quaternion_map_y": 2,
+  "quaternion_map_z": 3,
   "debug_mode": false,
   "com_power_threshold": 0.25,
   "key_bindings": {

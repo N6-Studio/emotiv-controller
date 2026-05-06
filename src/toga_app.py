@@ -53,15 +53,18 @@ from core import (
 )
 from update_service import semver_less
 
-# Live motion readout axis labels when swap_pitch_roll_axes is False (pitch→X, roll→Y).
-_TILT_AXIS_LABELS: tuple[str, str] = ("pitch", "roll")
+# ``current_x`` / ``current_y`` are always quaternion-derived pitch° / roll° (forward-back / left-right).
+_TILT_READOUT_AXES: tuple[str, str] = ("pitch", "roll")
 
 
-def _motion_axis_labels(cfg: AppConfig) -> tuple[str, str]:
-    """Axis names for (current_x, current_y) given swap_pitch_roll_axes."""
-    if cfg.swap_pitch_roll_axes:
-        return ("roll", "pitch")
-    return _TILT_AXIS_LABELS
+def _stream_index_for_wxyz(cfg: AppConfig) -> tuple[int, int, int, int]:
+    """Indices into Cortex ``(Q0,Q1,Q2,Q3)`` that populate Hamilton ``(w,x,y,z)``."""
+    return (
+        cfg.quaternion_map_w,
+        cfg.quaternion_map_x,
+        cfg.quaternion_map_y,
+        cfg.quaternion_map_z,
+    )
 
 
 # Separator between quaternion segments (main readout row).
@@ -727,7 +730,7 @@ class EmotivBridgeApp(toga.App):
         )
         err_box.add(self.retry_button)
 
-        lx, ly = _motion_axis_labels(self.config_data)
+        lx, ly = _TILT_READOUT_AXES
         self.main_motion_readout, self._motion_readout_value_labels = self._build_live_motion_readout_row(
             lx, ly
         )
@@ -894,7 +897,7 @@ class EmotivBridgeApp(toga.App):
         )
         cal_content.add(self.timer_label)
 
-        ax, ay = _motion_axis_labels(self.config_data)
+        ax, ay = _TILT_READOUT_AXES
         self.calibration_live_readout, self._calibration_motion_value_labels = (
             self._build_live_motion_readout_row(ax, ay)
         )
@@ -953,7 +956,7 @@ class EmotivBridgeApp(toga.App):
                 style=Pack(font_size=20, font_weight="bold", padding_bottom=8, text_align=CENTER),
             )
         )
-        rx, ry = _motion_axis_labels(self.config_data)
+        rx, ry = _TILT_READOUT_AXES
         self.review_xy_label = toga.Label(
             f"{rx}=0.00° · {ry}=0.00°",
             style=Pack(padding_bottom=6, font_size=14, text_align=CENTER),
@@ -1063,27 +1066,38 @@ class EmotivBridgeApp(toga.App):
             )
         )
 
-        invert_pitch_sw = toga.Switch(
-            "Invert pitch axis (forward ↔ backward)",
-            value=self.config_data.invert_pitch,
-        )
-        form.add(invert_pitch_sw)
-        invert_roll_sw = toga.Switch(
-            "Invert roll axis (left ↔ right)",
-            value=self.config_data.invert_roll,
-        )
-        form.add(invert_roll_sw)
-        swap_axes_sw = toga.Switch(
-            "Swap pitch and roll on movement axes (pitch ↔ roll for forward/back vs left/right)",
-            value=self.config_data.swap_pitch_roll_axes,
-        )
-        form.add(swap_axes_sw)
         form.add(
             toga.Label(
-                "Applies to head tilt after calibration; recalibrate neutral if directions feel wrong.",
-                style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
+                "Quaternion → Hamilton (w,x,y,z): choose which Cortex Q0–Q3 slot fills each component.",
+                style=Pack(font_weight="bold", padding_top=4),
             )
         )
+        form.add(
+            toga.Label(
+                "Each of w,x,y,z must use a different slot (0=Q0 … 3=Q3). Invalid presets reset to 0,1,2,3.",
+                style=Pack(color="#6b7280", font_size=10, padding_bottom=8),
+            )
+        )
+
+        quat_inputs: dict[str, toga.NumberInput] = {}
+        for label, key in (
+            ("w from stream index", "quaternion_map_w"),
+            ("x from stream index", "quaternion_map_x"),
+            ("y from stream index", "quaternion_map_y"),
+            ("z from stream index", "quaternion_map_z"),
+        ):
+            row = toga.Box(style=Pack(direction=ROW, padding_top=4))
+            row.add(toga.Label(label, style=Pack(flex=1)))
+            ni = toga.NumberInput(
+                min=0,
+                max=3,
+                step=1,
+                value=float(getattr(self.config_data, key)),
+                style=Pack(width=72),
+            )
+            row.add(ni)
+            form.add(row)
+            quat_inputs[key] = ni
 
         tg_sw = toga.Switch("Single threshold for all movements", value=self.config_data.threshold_global)
         form.add(tg_sw)
@@ -1168,9 +1182,18 @@ class EmotivBridgeApp(toga.App):
             self.config_data.keyboard_enabled = bool(kb_sw.value)
             self.config_data.keyboard_com_enabled = bool(kb_com_sw.value)
             self.config_data.debug_mode = bool(debug_sw.value)
-            self.config_data.invert_pitch = bool(invert_pitch_sw.value)
-            self.config_data.invert_roll = bool(invert_roll_sw.value)
-            self.config_data.swap_pitch_roll_axes = bool(swap_axes_sw.value)
+            for attr in (
+                "quaternion_map_w",
+                "quaternion_map_x",
+                "quaternion_map_y",
+                "quaternion_map_z",
+            ):
+                try:
+                    v = int(round(float(quat_inputs[attr].value)))
+                except (TypeError, ValueError):
+                    v = 0
+                setattr(self.config_data, attr, v)
+            self.config_data._normalize_quaternion_map()
             self.config_data.threshold_global = bool(tg_sw.value)
             self.config_data.threshold = float(thr_global.value)
             for m, inp in per_inputs.items():
@@ -1282,16 +1305,10 @@ class EmotivBridgeApp(toga.App):
             if len(mot) >= 2:
                 mot_cols = self.cortex.mot_cols if self.cortex is not None else None
                 self._last_quat = mot_quaternion(mot, mot_cols)
-                px, py = mot_to_tilt_xy(mot, mot_cols)
-                cfg = self.config_data
-                pitch_val = -px if cfg.invert_pitch else px
-                roll_val = -py if cfg.invert_roll else py
-                if cfg.swap_pitch_roll_axes:
-                    self.current_x = roll_val
-                    self.current_y = pitch_val
-                else:
-                    self.current_x = pitch_val
-                    self.current_y = roll_val
+                qmap = _stream_index_for_wxyz(self.config_data)
+                px, py = mot_to_tilt_xy(mot, mot_cols, stream_index_for_wxyz=qmap)
+                self.current_x = px
+                self.current_y = py
                 motion_detected.update(self.map_motion(self.current_x, self.current_y))
 
         if isinstance(msg.get("com"), list):
@@ -1375,9 +1392,9 @@ class EmotivBridgeApp(toga.App):
             hy = 0.0
         else:
             nx, ny = float(neutral_x), float(neutral_y)
-            dx = self.current_y - ny
-            dy = self.current_x - nx
-            hx, hy = reticle_offset_deg_to_normalized(dx, dy, ny, nx)
+            dx_pitch = self.current_x - nx
+            dy_roll = self.current_y - ny
+            hx, hy = reticle_offset_deg_to_normalized(dx_pitch, dy_roll, nx, ny)
 
         px = cx + max(-aim_half, min(aim_half, hx * aim_half))
         py = cy + max(-aim_half, min(aim_half, hy * aim_half))
@@ -1394,27 +1411,27 @@ class EmotivBridgeApp(toga.App):
             nx, ny = float(neutral_x), float(neutral_y)
             left, top = cx - aim_half, cy - aim_half
             right, bottom = cx + aim_half, cy + aim_half
-            _, hy_fwd = reticle_offset_deg_to_normalized(0.0, -t_fwd, ny, nx)
-            _, hy_back = reticle_offset_deg_to_normalized(0.0, t_back, ny, nx)
-            hx_left, _ = reticle_offset_deg_to_normalized(-t_left, 0.0, ny, nx)
-            hx_right, _ = reticle_offset_deg_to_normalized(t_right, 0.0, ny, nx)
+            hx_fwd, _ = reticle_offset_deg_to_normalized(-t_fwd, 0.0, nx, ny)
+            hx_back, _ = reticle_offset_deg_to_normalized(t_back, 0.0, nx, ny)
+            _, hy_left = reticle_offset_deg_to_normalized(0.0, -t_left, nx, ny)
+            _, hy_right = reticle_offset_deg_to_normalized(0.0, t_right, nx, ny)
             with ctx.Fill(color=_AIM_ACTIVATION_FILL) as band:
-                y1 = cy + hy_fwd * aim_half
-                h_top = y1 - top
-                if h_top > 0:
-                    band.rect(left, top, right - left, h_top)
-                y0 = cy + hy_back * aim_half
-                h_bot = bottom - y0
-                if h_bot > 0:
-                    band.rect(left, y0, right - left, h_bot)
-                x1 = cx + hx_left * aim_half
+                x1 = cx + hx_fwd * aim_half
                 w_left = x1 - left
                 if w_left > 0:
                     band.rect(left, top, w_left, bottom - top)
-                x0 = cx + hx_right * aim_half
+                x0 = cx + hx_back * aim_half
                 w_right = right - x0
                 if w_right > 0:
                     band.rect(x0, top, w_right, bottom - top)
+                y1 = cy + hy_left * aim_half
+                h_top = y1 - top
+                if h_top > 0:
+                    band.rect(left, top, right - left, h_top)
+                y0 = cy + hy_right * aim_half
+                h_bot = bottom - y0
+                if h_bot > 0:
+                    band.rect(left, y0, right - left, h_bot)
 
         with ctx.Stroke(color=_AIM_FRAME, line_width=1.0) as frame:
             frame.rect(cx - aim_half, cy - aim_half, side_len, side_len)
@@ -1439,7 +1456,7 @@ class EmotivBridgeApp(toga.App):
         self.draw_crosshair()
         self._sync_movement_pad_cell_layout()
 
-        tx, ty = _motion_axis_labels(self.config_data)
+        tx, ty = _TILT_READOUT_AXES
         xy_text = f"{tx}={self.current_x:.2f}° · {ty}={self.current_y:.2f}°"
         if self.main_motion_readout is not None:
             self._sync_live_motion_readout(self._motion_readout_value_labels)
@@ -1486,7 +1503,7 @@ class EmotivBridgeApp(toga.App):
             if self.calibration_samples and self.calibration_xy_label is not None:
                 avg_x = sum(x for x, _ in self.calibration_samples) / len(self.calibration_samples)
                 avg_y = sum(y for _, y in self.calibration_samples) / len(self.calibration_samples)
-                axn, ayn = _motion_axis_labels(self.config_data)
+                axn, ayn = _TILT_READOUT_AXES
                 self.calibration_xy_label.text = (
                     f"avg {axn}={avg_x:.2f}° · avg {ayn}={avg_y:.2f}°"
                 )
