@@ -1386,10 +1386,11 @@ class EmotivBridgeApp(toga.App):
         side_len = 2.0 * aim_half
 
         if neutral_x is None or neutral_y is None:
-            dx = 0.0
-            dy = 0.0
-            hx = 0.0
-            hy = 0.0
+            # No calibration yet: show dot from absolute tilt (reference neutral at origin),
+            # but keep neutral-relative UI (threshold bands) hidden.
+            dx_pitch = self.current_x
+            dy_roll = self.current_y
+            hx, hy = reticle_offset_deg_to_normalized(dx_pitch, dy_roll, 0.0, 0.0)
         else:
             nx, ny = float(neutral_x), float(neutral_y)
             dx_pitch = self.current_x - nx
