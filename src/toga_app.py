@@ -1008,81 +1008,77 @@ class EmotivBridgeApp(toga.App):
         save_config(self.config_data)
         self.show_main_view()
 
-    def show_settings_view(self, widget: Optional[toga.Widget] = None) -> None:
-        self.current_view = "settings"
-        self._clear_panel_host()
-        assert self.panel_host is not None
-        ph = self.panel_host
+    def _settings_tab_save_row(self, on_save: Callable[[Optional[toga.Widget]], None]) -> toga.Box:
+        row = toga.Box(style=Pack(direction=ROW, padding_top=20, padding_bottom=12))
+        row.add(toga.Box(style=Pack(flex=1)))
+        row.add(toga.Button("Save", on_press=on_save, style=_action_btn_style()))
+        return row
 
-        screen = toga.Box(
-            style=Pack(
-                direction=COLUMN,
-                flex=1,
-                padding_top=16,
-                padding_bottom=16,
-                padding_left=16,
-                padding_right=16,
-            ),
+    def _build_general_tab(self) -> toga.Box:
+        box = toga.Box(
+            style=Pack(direction=COLUMN, padding_top=12, padding_bottom=12, padding_left=12, padding_right=12, flex=1),
         )
 
-        title_row = toga.Box(style=Pack(direction=ROW, alignment=CENTER, padding_bottom=12))
-        title_row.add(
-            toga.Label(
-                "Settings",
-                style=Pack(font_size=22, font_weight="bold", flex=1),
-            )
-        )
-        title_row.add(
-            toga.Button(
-                "Close",
-                on_press=lambda w: self.show_main_view(),
-                style=Pack(font_size=13, padding_left=12, padding_right=12, padding_top=6, padding_bottom=6),
-            )
-        )
-        screen.add(title_row)
-
-        form = toga.Box(style=Pack(direction=COLUMN))
-        screen.add(form)
-
-        kb_sw = toga.Switch(
-            "Keyboard presses",
-            value=self.config_data.keyboard_enabled,
-        )
-        form.add(kb_sw)
-        form.add(
-            toga.Label(
-                "Shortcut: Ctrl + Shift + K · or Ctrl + Alt + K if the first is in use",
-                style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
-            )
-        )
-        kb_com_sw = toga.Switch(
-            "Keyboard presses for mental commands",
-            value=self.config_data.keyboard_com_enabled,
-        )
-        form.add(kb_com_sw)
-        form.add(
-            toga.Label(
-                "Only applies when keyboard presses are on. Tilt keys are unchanged.",
-                style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
-            )
-        )
         debug_sw = toga.Switch(
             "Debug mode (update diagnostics)",
             value=self.config_data.debug_mode,
         )
-        form.add(debug_sw)
-        form.add(
+        box.add(debug_sw)
+        box.add(
             toga.Label(
                 "When on, writes detailed logs during in-app update install (Python + updater script).",
                 style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
             )
         )
 
-        tg_sw = toga.Switch("Single threshold for all movements", value=self.config_data.threshold_global)
-        form.add(tg_sw)
+        box.add(
+            toga.Button(
+                "Environment variables…",
+                on_press=lambda w: self.show_env_settings_view(),
+                style=Pack(padding_top=4),
+            )
+        )
+
+        ver_box = toga.Box(style=Pack(direction=COLUMN, padding_top=14))
+        box.add(ver_box)
+        ver_box.add(toga.Label(f"Version {get_app_version()}", style=Pack(color="#6b7280", font_size=10)))
+        ver_box.add(toga.Button("Check for updates", on_press=self._on_check_for_updates))
+
+        box.add(toga.Box(style=Pack(flex=1)))
+
+        def save_general(widget: Optional[toga.Widget] = None) -> None:
+            self.config_data.debug_mode = bool(debug_sw.value)
+            save_config(self.config_data)
+            self.show_main_view()
+
+        box.add(self._settings_tab_save_row(save_general))
+        return box
+
+    def _build_motion_tab(self) -> toga.Box:
+        box = toga.Box(
+            style=Pack(direction=COLUMN, padding_top=12, padding_bottom=12, padding_left=12, padding_right=12, flex=1),
+        )
+
+        kb_sw = toga.Switch(
+            "Keyboard presses",
+            value=self.config_data.keyboard_enabled,
+        )
+        box.add(kb_sw)
+        box.add(
+            toga.Label(
+                "Shortcut: Ctrl + Shift + K · or Ctrl + Alt + K if the first is in use",
+                style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
+            )
+        )
+
+        tg_sw = toga.Switch(
+            "Single threshold for all movements",
+            value=self.config_data.threshold_global,
+        )
+        box.add(tg_sw)
 
         threshold_host = toga.Box(style=Pack(direction=COLUMN))
-        form.add(threshold_host)
+        box.add(threshold_host)
 
         global_row = toga.Box(style=Pack(direction=ROW, padding_top=6))
         global_row.add(
@@ -1131,7 +1127,38 @@ class EmotivBridgeApp(toga.App):
         tg_sw.on_change = lambda w: refresh_threshold_mode()
         refresh_threshold_mode()
 
-        form.add(toga.Label("Mental command power threshold", style=Pack(padding_top=12)))
+        box.add(toga.Box(style=Pack(flex=1)))
+
+        def save_motion(widget: Optional[toga.Widget] = None) -> None:
+            self.config_data.keyboard_enabled = bool(kb_sw.value)
+            self.config_data.threshold_global = bool(tg_sw.value)
+            self.config_data.threshold = float(thr_global.value)
+            for m, inp in per_inputs.items():
+                self.config_data.movement_thresholds[m] = float(inp.value)
+            save_config(self.config_data)
+            self.show_main_view()
+
+        box.add(self._settings_tab_save_row(save_motion))
+        return box
+
+    def _build_mental_tab(self) -> toga.Box:
+        box = toga.Box(
+            style=Pack(direction=COLUMN, padding_top=12, padding_bottom=12, padding_left=12, padding_right=12, flex=1),
+        )
+
+        kb_com_sw = toga.Switch(
+            "Keyboard presses for mental commands",
+            value=self.config_data.keyboard_com_enabled,
+        )
+        box.add(kb_com_sw)
+        box.add(
+            toga.Label(
+                "Only applies when keyboard presses are on. Tilt keys are unchanged.",
+                style=Pack(color="#6b7280", font_size=10, padding_bottom=12),
+            )
+        )
+
+        box.add(toga.Label("Mental command power threshold", style=Pack(padding_top=12)))
         com_row = toga.Box(style=Pack(direction=ROW))
         com_row.add(toga.Box(style=Pack(flex=1)))
         com_thr = toga.NumberInput(
@@ -1142,9 +1169,9 @@ class EmotivBridgeApp(toga.App):
             style=Pack(width=100),
         )
         com_row.add(com_thr)
-        form.add(com_row)
+        box.add(com_row)
 
-        form.add(
+        box.add(
             toga.Label(
                 "Mental command keys (held while COM power is above threshold)",
                 style=Pack(color="#6b7280", font_size=10, padding_top=12, padding_bottom=4),
@@ -1159,47 +1186,64 @@ class EmotivBridgeApp(toga.App):
                 style=Pack(flex=1),
             )
             row.add(te)
-            form.add(row)
+            box.add(row)
             com_entries[cmd] = te
 
-        def save_settings(widget: Optional[toga.Widget] = None) -> None:
-            self.config_data.keyboard_enabled = bool(kb_sw.value)
+        box.add(toga.Box(style=Pack(flex=1)))
+
+        def save_mental(widget: Optional[toga.Widget] = None) -> None:
             self.config_data.keyboard_com_enabled = bool(kb_com_sw.value)
-            self.config_data.debug_mode = bool(debug_sw.value)
-            self.config_data.threshold_global = bool(tg_sw.value)
-            self.config_data.threshold = float(thr_global.value)
-            for m, inp in per_inputs.items():
-                self.config_data.movement_thresholds[m] = float(inp.value)
             self.config_data.com_power_threshold = float(com_thr.value)
             for cmd in COM_MAPPED_MENTAL_ACTIONS:
                 self.config_data.com_key_bindings[cmd] = com_entries[cmd].value.strip()
             save_config(self.config_data)
             self.show_main_view()
 
-        screen.add(
-            toga.Button(
-                "Environment variables…",
-                on_press=lambda w: self.show_env_settings_view(),
-                style=Pack(padding_top=14),
-            )
+        box.add(self._settings_tab_save_row(save_mental))
+        return box
+
+    def show_settings_view(self, widget: Optional[toga.Widget] = None) -> None:
+        self.current_view = "settings"
+        self._clear_panel_host()
+        assert self.panel_host is not None
+        ph = self.panel_host
+
+        screen = toga.Box(
+            style=Pack(
+                direction=COLUMN,
+                flex=1,
+                padding_top=16,
+                padding_bottom=16,
+                padding_left=16,
+                padding_right=16,
+            ),
         )
 
-        ver_box = toga.Box(style=Pack(direction=COLUMN, padding_top=10))
-        screen.add(ver_box)
-        ver_box.add(toga.Label(f"Version {get_app_version()}", style=Pack(color="#6b7280", font_size=10)))
-        ver_box.add(toga.Button("Check for updates", on_press=self._on_check_for_updates))
-
-        br = toga.Box(style=Pack(direction=ROW, padding_top=20, padding_bottom=12))
-        screen.add(br)
-        br.add(toga.Box(style=Pack(flex=1)))
-        br.add(
+        title_row = toga.Box(style=Pack(direction=ROW, alignment=CENTER, padding_bottom=12))
+        title_row.add(
+            toga.Label(
+                "Settings",
+                style=Pack(font_size=22, font_weight="bold", flex=1),
+            )
+        )
+        title_row.add(
             toga.Button(
-                "Back",
+                "Close",
                 on_press=lambda w: self.show_main_view(),
-                style=_action_btn_style(gap_after=True),
+                style=Pack(font_size=13, padding_left=12, padding_right=12, padding_top=6, padding_bottom=6),
             )
         )
-        br.add(toga.Button("Save", on_press=save_settings, style=_action_btn_style()))
+        screen.add(title_row)
+
+        tabs = toga.OptionContainer(
+            content=[
+                ("General", self._build_general_tab()),
+                ("Motion", self._build_motion_tab()),
+                ("Mental", self._build_mental_tab()),
+            ],
+            style=Pack(flex=1),
+        )
+        screen.add(tabs)
 
         ph.add(screen)
 
