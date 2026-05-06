@@ -57,7 +57,7 @@ def _config_path() -> Path:
     return CONFIG_PATH
 
 
-DEFAULT_THRESHOLD = 10.0
+DEFAULT_THRESHOLD = 0.15
 DEFAULT_COM_POWER_THRESHOLD = 0.25
 DEFAULT_COM_KEY_BINDINGS = {
     "push": "q",
@@ -120,11 +120,6 @@ class AppConfig:
     movement_thresholds: dict = field(default_factory=dict)
     keyboard_enabled: bool = False
     keyboard_com_enabled: bool = False
-    # Each Hamilton component (w,x,y,z) is taken from Cortex quaternion slot Q0..Q3 (indices 0..3).
-    quaternion_map_w: int = 0
-    quaternion_map_x: int = 1
-    quaternion_map_y: int = 2
-    quaternion_map_z: int = 3
     debug_mode: bool = False
     com_power_threshold: float = DEFAULT_COM_POWER_THRESHOLD
     key_bindings: dict = None
@@ -161,35 +156,11 @@ class AppConfig:
                 else:
                     merged[cmd] = str(v).strip()
             self.com_key_bindings = merged
-        self._normalize_quaternion_map()
         if not isinstance(self.emotiv_debit, int):
             try:
                 self.emotiv_debit = int(str(self.emotiv_debit).strip())
             except (TypeError, ValueError):
                 self.emotiv_debit = 1
-
-    def _normalize_quaternion_map(self) -> None:
-        """Ensure quaternion indices are a permutation of ``{0,1,2,3}`` (Cortex Q0..Q3 slots)."""
-        raw = (
-            self.quaternion_map_w,
-            self.quaternion_map_x,
-            self.quaternion_map_y,
-            self.quaternion_map_z,
-        )
-        try:
-            idx = tuple(int(round(float(x))) for x in raw)
-        except (TypeError, ValueError):
-            idx = (0, 1, 2, 3)
-        else:
-            if len(idx) != 4 or len(set(idx)) != 4 or any(i not in (0, 1, 2, 3) for i in idx):
-                idx = (0, 1, 2, 3)
-        (
-            self.quaternion_map_w,
-            self.quaternion_map_x,
-            self.quaternion_map_y,
-            self.quaternion_map_z,
-        ) = idx
-
 
 def load_config() -> AppConfig:
     path = _config_path()
@@ -203,22 +174,27 @@ def load_config() -> AppConfig:
         allowed = {f.name for f in fields(AppConfig)}
         filtered = {k: v for k, v in raw.items() if k in allowed}
         cfg = AppConfig(**filtered)
-        # Clear neutrals from pre-degree tilt calibration (magnetometer-scale ~50 on pitch).
-        nx = cfg.neutral_x
-        if nx is not None and (nx > 35.0 or nx < -35.0):
+        nx, ny = cfg.neutral_x, cfg.neutral_y
+        bad_neutral = False
+        if nx is not None and abs(float(nx)) > 3.0:
+            bad_neutral = True
+        if ny is not None and abs(float(ny)) > 3.0:
+            bad_neutral = True
+        if bad_neutral:
             cfg.neutral_x = None
             cfg.neutral_y = None
+        if float(cfg.threshold) > 1.0:
+            cfg.threshold = DEFAULT_THRESHOLD
+            cfg.movement_thresholds = {
+                movement: DEFAULT_THRESHOLD for movement in MOVEMENTS
+            }
         return cfg
     except Exception:
         return AppConfig()
 
 
 def save_config(config: AppConfig):
-    """Write ``config`` to disk as JSON (full ``AppConfig`` snapshot via ``asdict``).
-
-    Every field on ``AppConfig`` is persisted, including ``quaternion_map_*``,
-    so any code path that calls this keeps quaternion slot mapping in ``config.json``.
-    """
+    """Write ``config`` to disk as JSON (full ``AppConfig`` snapshot via ``asdict``)."""
     path = _config_path()
     path.write_text(
         json.dumps(asdict(config), indent=2),

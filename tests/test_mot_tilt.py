@@ -1,4 +1,4 @@
-"""Tests for Cortex ``mot`` → quaternion-based pitch/roll (degrees) mapping."""
+"""Tests for Cortex ``mot`` → ACC motion mapping (ACCY / ACCZ)."""
 
 import math
 
@@ -6,227 +6,131 @@ import pytest
 
 from core import (
     _MOT_COLS_12,
-    build_mot_index,
-    hamilton_wxyz_from_stream_quat,
-    mot_quaternion,
-    mot_to_tilt_xy,
-    quaternion_to_pitch_roll,
+    mot_acc_xyz,
+    mot_to_motion_xy,
 )
 
 
-def test_build_mot_index():
-    assert build_mot_index(["A", "B"]) == {"A": 0, "B": 1}
+def _mot12(acc_x: float, acc_y: float, acc_z: float) -> list[float]:
+    """Build a 12-slot ``mot`` row with ACC at standard indices."""
+    row = [0.0] * 12
+    row[2:6] = [1.0, 0.0, 0.0, 0.0]
+    row[6] = acc_x
+    row[7] = acc_y
+    row[8] = acc_z
+    return row
 
 
-def test_hamilton_wxyz_from_stream_quat_permutation():
-    q = (1.0, 2.0, 3.0, 4.0)
-    assert hamilton_wxyz_from_stream_quat(q, (3, 2, 1, 0)) == (4.0, 3.0, 2.0, 1.0)
+def test_mot_to_motion_xy_legacy_short_array():
+    assert mot_to_motion_xy([0, 0, 3.0, 4.0], None) == (3.0, 4.0)
 
 
-def test_mot_to_tilt_xy_stream_index_mapping():
-    mot = [
-        48,
-        0,
-        0.735341,
-        0.255615,
-        0.627441,
-        -0.015869,
-        0.948257,
-        -0.354986,
-        -0.083497,
-        -44.656766,
-        -86.970985,
-        23.221568,
-    ]
+def test_mot_acc_xyz_legacy_short_array():
+    assert mot_acc_xyz([0, 0, 3.0, 4.0], None) is None
+
+
+def test_mot_acc_xyz_twelve_elements_without_cols():
+    ax, ay, az = 0.94, -0.31, -0.01
+    mot = _mot12(ax, ay, az)
+    assert mot_acc_xyz(mot, None) == pytest.approx((ax, ay, az))
+
+
+def test_mot_to_motion_xy_twelve_elements_returns_acc_y_z():
+    ax, ay, az = 0.735341, 0.627441, -0.015869
+    mot = _mot12(ax, ay, az)
+    x, y = mot_to_motion_xy(mot, None)
+    assert x == pytest.approx(ay)
+    assert y == pytest.approx(az)
+
+
+def test_mot_acc_xyz_non_finite_returns_none():
+    mot_nan = _mot12(1.0, float("nan"), 0.1)
+    assert mot_acc_xyz(mot_nan, list(_MOT_COLS_12)) is None
+
+
+def test_mot_to_motion_xy_non_finite_acc_falls_back_to_legacy_tail():
+    """When ACC is unusable, motion matches tail convention like older gyro fixtures."""
     cols = list(_MOT_COLS_12)
-    iwxyz = (3, 0, 1, 2)
-    raw = (0.735341, 0.255615, 0.627441, -0.015869)
-    w, x, y, z = hamilton_wxyz_from_stream_quat(raw, iwxyz)
-    pr = quaternion_to_pitch_roll(w, x, y, z)
-    expect = (math.degrees(pr[0]), math.degrees(pr[1]))
-    got = mot_to_tilt_xy(mot, cols, stream_index_for_wxyz=iwxyz)
-    assert got == pytest.approx(expect)
+    mot_nan = _mot12(1.0, float("nan"), 0.1)
+    mot_nan[-2] = 2.5
+    mot_nan[-1] = -3.0
+    x, y = mot_to_motion_xy(mot_nan, cols)
+    assert x == pytest.approx(2.5)
+    assert y == pytest.approx(-3.0)
 
 
-def test_quaternion_identity():
-    p, r = quaternion_to_pitch_roll(1.0, 0.0, 0.0, 0.0)
-    assert p == pytest.approx(0.0)
-    assert r == pytest.approx(0.0)
-
-
-def test_quaternion_pitch_only():
-    pitch = 0.25
-    w, x, y, z = math.cos(pitch / 2), 0.0, math.sin(pitch / 2), 0.0
-    p, r = quaternion_to_pitch_roll(w, x, y, z)
-    assert p == pytest.approx(pitch)
-    assert r == pytest.approx(0.0, abs=1e-6)
-
-
-def test_mot_to_tilt_xy_legacy_short_array():
-    assert mot_to_tilt_xy([0, 0, 3.0, 4.0], None) == (3.0, 4.0)
-
-
-def test_mot_quaternion_user_sample_matches_stream():
-    mot = [
-        20,
-        0,
-        0.308196,
-        0.582581,
-        -0.390076,
-        0.643005,
-        0.981565,
-        -0.167989,
-        0.019534,
-        -75.353924,
-        61.721796,
-        -3.624854,
+def test_mot_acc_xyz_legacy_layout_without_acc_columns_returns_none():
+    cols = [
+        "COUNTER_MEMS",
+        "INTERPOLATED_MEMS",
+        "GYROX",
+        "GYROY",
+        "GYROZ",
+        "MAGX",
+        "MAGY",
+        "MAGZ",
+        "FOO",
+        "BAR",
+        "BAZ",
     ]
-    q = mot_quaternion(mot, None)
-    assert q is not None
-    assert q == pytest.approx((0.308196, 0.582581, -0.390076, 0.643005))
+    mot = list(range(11))
+    assert mot_acc_xyz(mot, cols) is None
 
 
-def test_mot_quaternion_legacy_and_non_finite_return_none():
-    assert mot_quaternion([0, 0, 3.0, 4.0], None) is None
-    mot_nan = [
-        48,
-        0,
-        float("nan"),
-        float("nan"),
-        float("nan"),
-        float("nan"),
-        0.948257,
-        -0.354986,
-        -0.083497,
-        -44.656766,
-        -86.970985,
-        23.221568,
+def test_mot_to_motion_xy_legacy_layout_falls_back_to_tail_when_named_cols():
+    cols = [
+        "COUNTER_MEMS",
+        "INTERPOLATED_MEMS",
+        "GYROX",
+        "GYROY",
+        "GYROZ",
+        "MAGX",
+        "MAGY",
+        "MAGZ",
+        "FOO",
+        "BAR",
+        "BAZ",
     ]
-    assert mot_quaternion(mot_nan, list(_MOT_COLS_12)) is None
+    mot = list(range(11))
+    assert mot_to_motion_xy(mot, cols) == (float(mot[-2]), float(mot[-1]))
 
 
-def test_mot_quaternion_eleven_element_gyro_layout_returns_none():
-    mot = [
-        14,
-        0,
-        8206,
-        8187,
-        8181,
-        4235,
-        8668,
-        8128,
-        8294,
-        8237,
-        7938,
+def test_mot_to_motion_xy_eleven_elements_without_cols_returns_legacy_tail():
+    mot = list(range(11))
+    assert mot_to_motion_xy(mot, None) == (float(mot[-2]), float(mot[-1]))
+
+
+def test_headset_samples_sign_pattern():
+    """Real headset checks: left Z−, right Z+, forward Y−, backward Y+."""
+    sinistra = _mot12(0.936149, 0.12355, -0.352094)
+    destra = _mot12(0.846783, 0.124527, 0.527408)
+    avanti = _mot12(0.944451, -0.301795, -0.010255)
+    indietro = _mot12(0.876084, 0.505921, -0.014162)
+
+    ly_s, lz_s = mot_to_motion_xy(sinistra, None)
+    ly_d, lz_d = mot_to_motion_xy(destra, None)
+    ly_a, lz_a = mot_to_motion_xy(avanti, None)
+    ly_i, lz_i = mot_to_motion_xy(indietro, None)
+
+    assert lz_s < 0 and lz_d > 0
+    assert ly_a < 0 and ly_i > 0
+    assert math.isfinite(ly_s) and math.isfinite(lz_s)
+
+
+def test_named_cols_resolve_acc():
+    cols = [
+        "COUNTER_MEMS",
+        "INTERPOLATED_MEMS",
+        "Q0",
+        "Q1",
+        "Q2",
+        "Q3",
+        "ACCX",
+        "ACCY",
+        "ACCZ",
+        "MAGX",
+        "MAGY",
+        "MAGZ",
     ]
-    assert mot_quaternion(mot, None) is None
-
-
-def test_mot_to_tilt_xy_user_sample_uses_quaternion():
-    """User-provided sample: quaternion drives pitch/roll, ACC is ignored."""
-    mot = [
-        20,
-        0,
-        0.308196,
-        0.582581,
-        -0.390076,
-        0.643005,
-        0.981565,
-        -0.167989,
-        0.019534,
-        -75.353924,
-        61.721796,
-        -3.624854,
-    ]
-    pr = quaternion_to_pitch_roll(0.308196, 0.582581, -0.390076, 0.643005)
-    expect_x = math.degrees(pr[0])
-    expect_y = math.degrees(pr[1])
-    x, y = mot_to_tilt_xy(mot, None)
-    assert x == pytest.approx(expect_x)
-    assert y == pytest.approx(expect_y)
-
-
-def test_mot_to_tilt_xy_cortex_sample_with_cols_uses_quaternion():
-    mot = [
-        48,
-        0,
-        0.735341,
-        0.255615,
-        0.627441,
-        -0.015869,
-        0.948257,
-        -0.354986,
-        -0.083497,
-        -44.656766,
-        -86.970985,
-        23.221568,
-    ]
-    cols = list(_MOT_COLS_12)
-    pr = quaternion_to_pitch_roll(0.735341, 0.255615, 0.627441, -0.015869)
-    expect_x = math.degrees(pr[0])
-    expect_y = math.degrees(pr[1])
-    x, y = mot_to_tilt_xy(mot, cols)
-    assert x == pytest.approx(expect_x)
-    assert y == pytest.approx(expect_y)
-
-
-def test_mot_to_tilt_xy_twelve_elements_without_cols_uses_quaternion():
-    mot = [
-        48,
-        0,
-        0.735341,
-        0.255615,
-        0.627441,
-        -0.015869,
-        0.948257,
-        -0.354986,
-        -0.083497,
-        -44.656766,
-        -86.970985,
-        23.221568,
-    ]
-    pr = quaternion_to_pitch_roll(0.735341, 0.255615, 0.627441, -0.015869)
-    x, y = mot_to_tilt_xy(mot, None)
-    assert x == pytest.approx(math.degrees(pr[0]))
-    assert y == pytest.approx(math.degrees(pr[1]))
-
-
-def test_mot_to_tilt_xy_returns_legacy_tail_when_quaternion_not_finite():
-    mot = [
-        48,
-        0,
-        float("nan"),
-        float("nan"),
-        float("nan"),
-        float("nan"),
-        0.948257,
-        -0.354986,
-        -0.083497,
-        -44.656766,
-        -86.970985,
-        23.221568,
-    ]
-    cols = list(_MOT_COLS_12)
-    x, y = mot_to_tilt_xy(mot, cols)
-    assert x == pytest.approx(float(mot[-2]))
-    assert y == pytest.approx(float(mot[-1]))
-
-
-def test_mot_to_tilt_xy_eleven_gyro_layout_returns_legacy_tail():
-    """Older 11-col headsets have no quaternions → falls through to legacy tail."""
-    mot = [
-        14,
-        0,
-        8206,
-        8187,
-        8181,
-        4235,
-        8668,
-        8128,
-        8294,
-        8237,
-        7938,
-    ]
-    x, y = mot_to_tilt_xy(mot, None)
-    assert x == pytest.approx(float(mot[-2]))
-    assert y == pytest.approx(float(mot[-1]))
+    mot = _mot12(0.5, -0.2, 0.4)
+    assert mot_to_motion_xy(mot, cols) == pytest.approx((-0.2, 0.4))

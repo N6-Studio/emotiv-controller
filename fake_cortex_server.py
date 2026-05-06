@@ -5,9 +5,8 @@ Emits the same JSON-RPC responses as Cortex for requestAccess → subscribe, the
 pushes synthetic ``mot`` (and optionally ``com``) stream frames. For a few seconds
 after streaming starts, the headset is upright (no lean) for calibration, then
 tilt is driven in **random** mode by default: smoothed random waypoints within
-``±lean_deg`` (clamped to the same pitch/roll limits as ``core.reticle_offset_deg_to_normalized``).
-Use ``--pattern circle`` for the legacy constant-radius loop
-**forward → right → backward → left**.
+``±lean_deg``. **ACCY** / **ACCZ** carry the synthetic lean (what the app uses).
+Quaternions are filled for column compatibility only.
 
 Setup::
 
@@ -49,16 +48,20 @@ for _path in (_src, _root):
     if _s not in sys.path:
         sys.path.insert(0, _s)
 
-from core import (
-    TILT_PITCH_MAX_DEG,
-    TILT_PITCH_MIN_DEG,
-    TILT_ROLL_MAX_DEG,
-    TILT_ROLL_MIN_DEG,
-)
-
-# Keep generated pitch inside asin domain with margin (matches ``_quat_from_pitch_roll_rad`` note).
+# Clamp synthetic euler-ish degrees before mapping to ACC (asin domain margin for quats).
 _PITCH_CLAMP_MARGIN_DEG = 0.75
 _JITTER_SIGMA_DEG = 0.25
+
+_TILT_PITCH_MIN_DEG = -90.0
+_TILT_PITCH_MAX_DEG = 90.0
+_TILT_ROLL_MIN_DEG = -180.0
+_TILT_ROLL_MAX_DEG = 180.0
+
+# Baselines and gain chosen so ``--lean-deg`` ~14 produces ACC deltas comparable to real headset tuning.
+_ACC_NEUT_Y = 0.12
+_ACC_NEUT_Z = -0.01
+_ACC_GAIN = 0.03
+_ACC_X_IDLE = 0.92
 
 
 def _client_addr(websocket: Any) -> str:
@@ -116,11 +119,7 @@ def _handle_method(method: str, _params: dict) -> dict:
 
 
 def _quat_from_pitch_roll_rad(pitch_rad: float, roll_rad: float) -> tuple[float, float, float, float]:
-    """Hamilton ``(w, x, y, z) = q_pitch * q_roll`` matching ``core.quaternion_to_pitch_roll``.
-
-    Pitch rotates about Y; roll rotates about X. Composing this way makes the
-    decomposition recover the input pitch/roll exactly when |pitch| < 90°.
-    """
+    """Hamilton ``(w, x, y, z)`` for optional quaternion columns (not used by the app)."""
     cp = math.cos(pitch_rad / 2.0)
     sp = math.sin(pitch_rad / 2.0)
     cr = math.cos(roll_rad / 2.0)
@@ -132,12 +131,20 @@ def _quat_from_pitch_roll_rad(pitch_rad: float, roll_rad: float) -> tuple[float,
     return w, x, y, z
 
 
+def _pitch_roll_deg_to_acc(pitch_deg: float, roll_deg: float) -> tuple[float, float, float]:
+    """Map synthetic pitch/roll degrees to ACC X/Y/Z (same sign conventions as the live bridge)."""
+    ay = _ACC_NEUT_Y + pitch_deg * _ACC_GAIN
+    az = _ACC_NEUT_Z + roll_deg * _ACC_GAIN
+    ax = _ACC_X_IDLE
+    return ax, ay, az
+
+
 def _pitch_roll_clamp_deg(pitch_deg: float, roll_deg: float) -> tuple[float, float]:
     pm = _PITCH_CLAMP_MARGIN_DEG
-    p_lo = TILT_PITCH_MIN_DEG + pm
-    p_hi = TILT_PITCH_MAX_DEG - pm
+    p_lo = _TILT_PITCH_MIN_DEG + pm
+    p_hi = _TILT_PITCH_MAX_DEG - pm
     p = max(p_lo, min(p_hi, pitch_deg))
-    r = max(TILT_ROLL_MIN_DEG, min(TILT_ROLL_MAX_DEG, roll_deg))
+    r = max(_TILT_ROLL_MIN_DEG, min(_TILT_ROLL_MAX_DEG, roll_deg))
     return p, r
 
 
@@ -160,7 +167,6 @@ def _randomize_stream_defaults(args: argparse.Namespace) -> None:
     args.seed = None
 
 
-# Upright / no lean → identity quaternion → ~0° pitch and roll.
 _QUAT_UPRIGHT = _quat_from_pitch_roll_rad(0.0, 0.0)
 
 
@@ -178,7 +184,7 @@ async def _stream_loop(
     seed: int | None,
     client: str,
 ) -> None:
-    """Send ``mot`` frames with synthetic pitch/roll after an optional upright phase."""
+    """Send ``mot`` frames with synthetic ACC after an optional upright phase."""
     if seed is not None:
         random.seed(seed)
     _log_event(
@@ -207,7 +213,6 @@ async def _stream_loop(
         await asyncio.sleep(interval)
         t += interval
         if t <= still_seconds:
-            q0, q1, q2, q3 = _QUAT_UPRIGHT
             pitch_deg = 0.0
             roll_deg = 0.0
         else:
@@ -230,16 +235,20 @@ async def _stream_loop(
                 pitch_deg += alpha * (target_pitch - pitch_deg) + random.gauss(0.0, _JITTER_SIGMA_DEG)
                 roll_deg += alpha * (target_roll - roll_deg) + random.gauss(0.0, _JITTER_SIGMA_DEG)
                 pitch_deg, roll_deg = _pitch_roll_clamp_deg(pitch_deg, roll_deg)
-            pitch_rad = math.radians(pitch_deg)
-            roll_rad = math.radians(roll_deg)
-            q0, q1, q2, q3 = _quat_from_pitch_roll_rad(pitch_rad, roll_rad)
-            if t - last_progress_log >= progress_log_every:
-                last_progress_log = t
-                _log_event(
-                    client,
-                    f"lean tick t={t:.1f}s pitch={pitch_deg:.1f}° roll={roll_deg:.1f}° "
-                    f"Q=({q0:.4f},{q1:.4f},{q2:.4f},{q3:.4f})",
-                )
+        pitch_deg_s, roll_deg_s = _pitch_roll_clamp_deg(pitch_deg, roll_deg)
+        pitch_rad = math.radians(pitch_deg_s)
+        roll_rad = math.radians(roll_deg_s)
+        q0, q1, q2, q3 = (
+            _QUAT_UPRIGHT if t <= still_seconds else _quat_from_pitch_roll_rad(pitch_rad, roll_rad)
+        )
+        acc_x, acc_y, acc_z = _pitch_roll_deg_to_acc(pitch_deg_s, roll_deg_s)
+        if t > still_seconds and t - last_progress_log >= progress_log_every:
+            last_progress_log = t
+            _log_event(
+                client,
+                f"lean tick t={t:.1f}s pitch={pitch_deg_s:.1f}° roll={roll_deg_s:.1f}° "
+                f"ACC=({acc_x:.4f},{acc_y:.4f},{acc_z:.4f}) Q=({q0:.4f},{q1:.4f},{q2:.4f},{q3:.4f})",
+            )
         mot = [
             0,
             0,
@@ -247,9 +256,9 @@ async def _stream_loop(
             round(q1, 6),
             round(q2, 6),
             round(q3, 6),
-            0.0,
-            0.0,
-            1.0,
+            round(acc_x, 6),
+            round(acc_y, 6),
+            round(acc_z, 6),
             -44.656766,
             -86.970985,
             23.221568,
@@ -374,13 +383,13 @@ async def _run_server(
         if pattern == "circle":
             print(
                 f"Lean cycle {cycle_seconds}s, radius {lean_deg}° pitch/roll "
-                "(forward-right-back-left-forward, constant outward lean)",
+                "(forward-right-back-left-forward; ACC tracks pitch/roll)",
                 flush=True,
             )
         else:
             print(
                 f"Random lean: ±{lean_deg}° targets every {waypoint_seconds}s, "
-                f"smooth τ={smooth_seconds}s (clamped to app pitch/roll limits)",
+                f"smooth τ={smooth_seconds}s",
                 flush=True,
             )
             if seed is not None:
@@ -419,7 +428,7 @@ def main() -> None:
         "--lean-deg",
         type=float,
         default=14.0,
-        help="Tilt magnitude in degrees (default 14, above typical 10° threshold)",
+        help="Tilt magnitude in degrees (default 14; ACC swing scales with this)",
     )
     p.add_argument(
         "--still-seconds",

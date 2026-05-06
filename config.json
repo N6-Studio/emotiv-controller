@@ -1,20 +1,16 @@
 {
-  "neutral_x": -0.5393267674760915,
-  "neutral_y": -21.454630297819108,
-  "threshold": 10.0,
+  "neutral_x": null,
+  "neutral_y": null,
+  "threshold": 0.15,
   "threshold_global": true,
   "movement_thresholds": {
-    "forward": 10.0,
-    "left": 10.0,
-    "backward": 10.0,
-    "right": 10.0
+    "forward": 0.15,
+    "left": 0.15,
+    "backward": 0.15,
+    "right": 0.15
   },
   "keyboard_enabled": false,
   "keyboard_com_enabled": false,
-  "quaternion_map_w": 0,
-  "quaternion_map_x": 1,
-  "quaternion_map_y": 2,
-  "quaternion_map_z": 3,
   "debug_mode": false,
   "com_power_threshold": 0.25,
   "key_bindings": {
