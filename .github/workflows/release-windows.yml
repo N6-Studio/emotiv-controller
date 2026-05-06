@@ -74,20 +74,23 @@ jobs:
           DOWNLOAD_URL: ${{ steps.meta.outputs.download_url }}
         run: |
           set -euo pipefail
-          python -c "
+          python <<'PY'
           import hashlib, json, os, pathlib
-          exe = pathlib.Path(f'dist/EmotivController-{os.environ["APP_VERSION"]}.exe')
+
+          exe = pathlib.Path(
+              f"dist/EmotivController-{os.environ['APP_VERSION']}.exe"
+          )
           h = hashlib.sha256(exe.read_bytes()).hexdigest().lower()
           obj = {
-              'version': os.environ['APP_VERSION'],
-              'download_url': os.environ['DOWNLOAD_URL'],
-              'sha256': h,
+              "version": os.environ["APP_VERSION"],
+              "download_url": os.environ["DOWNLOAD_URL"],
+              "sha256": h,
           }
-          pathlib.Path('latest.json').write_text(
-              json.dumps(obj, separators=(',', ':')),
-              encoding='utf-8',
+          pathlib.Path("latest.json").write_text(
+              json.dumps(obj, separators=(",", ":")),
+              encoding="utf-8",
           )
-          "
+          PY
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
