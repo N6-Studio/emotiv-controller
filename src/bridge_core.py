@@ -447,15 +447,16 @@ class SimulatedKeyboard:
         com_actions: set,
         config: AppConfig,
     ):
-        if not config.keyboard_enabled:
+        if not config.keyboard_enabled and not config.keyboard_com_enabled:
             self.release_all(config)
             return
 
+        effective_motion = motion_movements if config.keyboard_enabled else set()
         effective_com = com_actions if config.keyboard_com_enabled else set()
 
         prev_m = self._tap_prev_motion
         prev_c = self._tap_prev_com
-        prev_motion_eff = prev_m if prev_m is not None else motion_movements
+        prev_motion_eff = prev_m if prev_m is not None else effective_motion
         prev_com_eff = prev_c if prev_c is not None else effective_com
 
         for movement in MOVEMENTS:
@@ -466,12 +467,12 @@ class SimulatedKeyboard:
             if mode == KEYBOARD_KEY_MODE_PRESS:
                 if movement in self.pressed_movements:
                     self.release(movement, key)
-                if movement in motion_movements and movement not in prev_motion_eff:
+                if movement in effective_motion and movement not in prev_motion_eff:
                     self._tap_physical_key(key)
             elif mode == KEYBOARD_KEY_MODE_SPAM:
                 if movement in self.pressed_movements:
                     self.release(movement, key)
-                if movement in motion_movements:
+                if movement in effective_motion:
                     now = self._clock()
                     last = self._repeat_last_tap_motion.get(movement)
                     rising = movement not in prev_motion_eff
@@ -482,7 +483,7 @@ class SimulatedKeyboard:
                 else:
                     self._repeat_last_tap_motion.pop(movement, None)
             else:
-                if movement in motion_movements:
+                if movement in effective_motion:
                     self.press(movement, key)
                 else:
                     self.release(movement, key)
@@ -516,7 +517,7 @@ class SimulatedKeyboard:
                 else:
                     self.release_com(action, key)
 
-        self._tap_prev_motion = set(motion_movements)
+        self._tap_prev_motion = set(effective_motion)
         self._tap_prev_com = set(effective_com)
 
     def release_all(self, config: AppConfig):
@@ -751,7 +752,7 @@ class CortexClient(threading.Thread):
 
 def _status_clears_connection_error_ui(status: str) -> bool:
     """Main-view status line is shared with Cortex progress and local UI hints."""
-    if status.startswith("Keyboard presses "):
+    if status.startswith("Motion & mental keyboard: "):
         return False
     if status.startswith("Keyboard shortcut is "):
         return False

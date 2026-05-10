@@ -87,12 +87,33 @@ def test_sync_keyboard_disabled_releases_all(keyboard_controller):
     kb = SimulatedKeyboard()
     cfg = AppConfig()
     cfg.keyboard_enabled = False
+    cfg.keyboard_com_enabled = False
     cfg.key_bindings["forward"] = "w"
 
     kb.press("forward", "w")
     kb.sync({"forward"}, set(), cfg)
     assert keyboard_controller.release.call_count == 1
     assert "forward" not in kb.pressed_movements
+
+
+def test_sync_mental_only_without_motion_keyboard(keyboard_controller):
+    """Mental COM keys work when motion keyboard output is disabled."""
+    from app import AppConfig, SimulatedKeyboard
+
+    kb = SimulatedKeyboard()
+    cfg = AppConfig()
+    cfg.keyboard_enabled = False
+    cfg.keyboard_com_enabled = True
+    cfg.keyboard_mental_key_mode = "hold"
+    cfg.key_bindings["forward"] = "w"
+    cfg.com_key_bindings["push"] = "p"
+
+    kb.sync({"forward"}, {"push"}, cfg)
+    keys_pressed = {c.args[0] for c in keyboard_controller.press.call_args_list}
+    assert keys_pressed == {"p"}
+
+    kb.sync(set(), set(), cfg)
+    assert kb.pressed_com_actions == set()
 
 
 def test_sync_motion_and_com(keyboard_controller):

@@ -20,7 +20,7 @@ from bridge_core import (
     get_app_version,
 )
 from toga.style import Pack
-from toga.style.pack import COLUMN, ROW
+from toga.style.pack import CENTER, COLUMN, ROW
 
 from ui_theme import pack_action_button, pack_muted_small
 
@@ -112,15 +112,23 @@ def build_motion_tab(
         style=Pack(direction=COLUMN, padding_top=12, padding_bottom=12, padding_left=12, padding_right=12, flex=1),
     )
 
-    kb_sw = toga.Switch(
-        "Keyboard presses",
+    kb_row = toga.Box(style=Pack(direction=ROW, alignment=CENTER))
+    kb_motion_sw = toga.Switch(
+        "Motion keyboard",
         value=config_data.keyboard_enabled,
     )
-    box.add(kb_sw)
+    kb_mental_sw = toga.Switch(
+        "Mental keyboard",
+        value=config_data.keyboard_com_enabled,
+    )
+    kb_row.add(kb_motion_sw)
+    kb_row.add(kb_mental_sw)
+    box.add(kb_row)
     box.add(
         toga.Label(
             "Shortcut: Ctrl + Shift + K · or Ctrl + Alt + K if the first is in use "
-            "(turns motion and mental keyboard presses on or off together)",
+            "(turns both motion and mental keyboard output on or off together). "
+            "You can turn Motion and Mental on or off independently here.",
             style=pack_muted_small(padding_bottom=12),
         )
     )
@@ -314,7 +322,8 @@ def build_motion_tab(
     box.add(toga.Box(style=Pack(flex=1)))
 
     def save_motion(widget: Optional[toga.Widget] = None) -> None:
-        config_data.keyboard_enabled = bool(kb_sw.value)
+        config_data.keyboard_enabled = bool(kb_motion_sw.value)
+        config_data.keyboard_com_enabled = bool(kb_mental_sw.value)
         config_data.keyboard_motion_hysteresis_frac = float(hysteresis_input.value)
         for movement in MOVEMENTS:
             s = motion_entries[movement].value.strip()
@@ -354,20 +363,14 @@ def build_mental_tab(
         style=Pack(direction=COLUMN, padding_top=12, padding_bottom=12, padding_left=12, padding_right=12, flex=1),
     )
 
-    kb_com_sw = toga.Switch(
-        "Keyboard presses for mental commands",
-        value=config_data.keyboard_com_enabled,
-    )
-    box.add(kb_com_sw)
     box.add(
         toga.Label(
-            "Only applies when motion keyboard presses are on. "
-            "Ctrl+Shift+K (or Ctrl+Alt+K) toggles motion and mental presses together.",
+            "Turn mental keyboard output on or off with the Mental keyboard switch on the Motion tab.",
             style=pack_muted_small(padding_bottom=12),
         )
     )
 
-    box.add(toga.Label("Mental command power threshold", style=Pack(padding_top=12)))
+    box.add(toga.Label("Mental command power threshold", style=Pack(padding_top=4)))
     com_row = toga.Box(style=Pack(direction=ROW))
     com_row.add(toga.Box(style=Pack(flex=1)))
     com_thr = toga.NumberInput(
@@ -474,7 +477,6 @@ def build_mental_tab(
     box.add(toga.Box(style=Pack(flex=1)))
 
     def save_mental(widget: Optional[toga.Widget] = None) -> None:
-        config_data.keyboard_com_enabled = bool(kb_com_sw.value)
         config_data.com_power_threshold = float(com_thr.value)
         for cmd in COM_MAPPED_MENTAL_ACTIONS:
             config_data.com_key_bindings[cmd] = com_entries[cmd].value.strip()

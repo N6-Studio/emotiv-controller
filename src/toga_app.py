@@ -357,9 +357,9 @@ class EmotivBridgeApp(toga.App):
         self.config_data.keyboard_com_enabled = self.config_data.keyboard_enabled
         save_config(self.config_data)
         self.status_queue.put(
-            "Keyboard presses on"
+            "Motion & mental keyboard: on"
             if self.config_data.keyboard_enabled
-            else "Keyboard presses off"
+            else "Motion & mental keyboard: off"
         )
 
     def _install_pynput_hotkey(self) -> None:
@@ -1234,9 +1234,8 @@ class EmotivBridgeApp(toga.App):
     def _update_ui_main_dashboard(self, mv: Optional[MainViewRefs]) -> None:
         if mv is not None and mv.keyboard_label is not None:
             mv.keyboard_label.text = (
-                "Keyboard presses: on"
-                if self.config_data.keyboard_enabled
-                else "Keyboard presses: off"
+                f"Motion keyboard: {'on' if self.config_data.keyboard_enabled else 'off'}"
+                f" · Mental keyboard: {'on' if self.config_data.keyboard_com_enabled else 'off'}"
             )
 
         self._tick_win32_connection_busy_fallback(mv)
@@ -1323,7 +1322,7 @@ class EmotivBridgeApp(toga.App):
         drain_queue(self.keyboard_shortcut_queue, lambda _: self._toggle_keyboard_via_shortcut())
 
         def handle_status(status: str) -> None:
-            if not status.startswith("Keyboard presses ") and not status.startswith(
+            if not status.startswith("Motion & mental keyboard: ") and not status.startswith(
                 "Keyboard shortcut is "
             ):
                 self._last_cortex_status = status
