@@ -118,6 +118,38 @@ def build_motion_tab(
         )
     )
 
+    box.add(
+        toga.Label(
+            "Motion keys (simulated keyboard)",
+            style=pack_muted_small(padding_top=12, padding_bottom=4),
+        )
+    )
+    motion_entries: dict[str, toga.TextInput] = {}
+    for movement in MOVEMENTS:
+        row = toga.Box(style=Pack(direction=ROW, padding_top=4))
+        row.add(
+            toga.Label(
+                f"{MOVEMENTS[movement]['ui_name']} ({MOVEMENTS[movement]['label']} default)",
+                style=Pack(flex=1),
+            )
+        )
+        raw = config_data.key_bindings.get(movement)
+        if not raw:
+            raw = MOVEMENTS[movement]["default_key"]
+        te = toga.TextInput(
+            value=str(raw),
+            style=Pack(flex=1),
+        )
+        row.add(te)
+        box.add(row)
+        motion_entries[movement] = te
+    box.add(
+        toga.Label(
+            "Single character or pynput key name (e.g. w, left). Leave blank to restore default.",
+            style=pack_muted_small(padding_bottom=12),
+        )
+    )
+
     tg_sw = toga.Switch(
         "Single threshold for all movements",
         value=config_data.threshold_global,
@@ -179,6 +211,11 @@ def build_motion_tab(
     def save_motion(widget: Optional[toga.Widget] = None) -> None:
         config_data.keyboard_enabled = bool(kb_sw.value)
         config_data.keyboard_motion_hysteresis_frac = float(hysteresis_input.value)
+        for movement in MOVEMENTS:
+            s = motion_entries[movement].value.strip()
+            if not s:
+                s = MOVEMENTS[movement]["default_key"]
+            config_data.key_bindings[movement] = s
         config_data.threshold_global = bool(tg_sw.value)
         config_data.threshold = float(thr_global.value)
         for m, inp in per_inputs.items():
