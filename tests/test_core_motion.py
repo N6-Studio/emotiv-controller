@@ -1,6 +1,10 @@
 import pytest
 
-from core import compute_motion_movements, resolved_movement_thresholds
+from core import (
+    compute_motion_movements,
+    resolved_movement_thresholds,
+    stable_keyboard_motion_movements,
+)
 
 
 def _thresholds(**kwargs):
@@ -122,3 +126,60 @@ def test_x_axis_mutually_exclusive_forward_or_backward():
     )
     assert out == {"backward"}
     assert "forward" not in out
+
+
+def _keyboard_hysteresis_kwargs(**extra):
+    base = dict(
+        neutral_x=100.0,
+        neutral_y=100.0,
+        threshold_global=True,
+        threshold=5.0,
+        movement_thresholds=_thresholds(),
+        hysteresis_frac=0.4,
+    )
+    base.update(extra)
+    return base
+
+
+def test_keyboard_hysteresis_holds_forward_across_small_backward_jitter():
+    kw = _keyboard_hysteresis_kwargs()
+    assert stable_keyboard_motion_movements(x=95.0, y=100.0, prev=set(), **kw) == {
+        "forward",
+    }
+    assert stable_keyboard_motion_movements(x=96.5, y=100.0, prev={"forward"}, **kw) == {
+        "forward",
+    }
+    assert stable_keyboard_motion_movements(x=97.5, y=100.0, prev={"forward"}, **kw) == set()
+
+
+def test_keyboard_hysteresis_with_empty_prev_matches_raw_motion():
+    kwargs = dict(
+        neutral_x=0.0,
+        neutral_y=0.0,
+        threshold_global=True,
+        threshold=5.0,
+        movement_thresholds=_thresholds(),
+        hysteresis_frac=0.4,
+    )
+    for pair in [
+        (-5.0, 0.0),
+        (5.0, 0.0),
+        (0.0, -5.0),
+        (0.0, 5.0),
+        (-5.0, -5.0),
+    ]:
+        x, y = pair
+        raw = compute_motion_movements(
+            x, y, 0.0, 0.0, threshold_global=True, threshold=5.0, movement_thresholds=_thresholds()
+        )
+        assert stable_keyboard_motion_movements(x=x, y=y, prev=set(), **kwargs) == raw
+
+
+def test_keyboard_hysteresis_backward_holds_on_small_reverse_jitter():
+    kw = _keyboard_hysteresis_kwargs()
+    assert stable_keyboard_motion_movements(x=105.0, y=100.0, prev=set(), **kw) == {
+        "backward",
+    }
+    assert stable_keyboard_motion_movements(x=103.5, y=100.0, prev={"backward"}, **kw) == {
+        "backward",
+    }

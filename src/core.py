@@ -200,6 +200,68 @@ def compute_motion_movements(
     return movements
 
 
+# Fraction of each direction's threshold used as Schmitt deadband for simulated keys only.
+DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC = 0.4
+
+
+def stable_keyboard_motion_movements(
+    *,
+    x: float,
+    y: float,
+    neutral_x: float,
+    neutral_y: float,
+    prev: set[str],
+    threshold_global: bool,
+    threshold: float,
+    movement_thresholds: dict[str, float],
+    hysteresis_frac: float = DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC,
+) -> set[str]:
+    """Motion set for keyboard simulation with threshold hysteresis.
+
+    Raw :func:`compute_motion_movements` toggles at fixed boundaries; small sensor
+    jitter around those edges produces rapid press/release. This keeps a direction
+    active until the pose moves back toward neutral by an extra margin (Schmitt).
+    """
+    t_fwd, t_back, t_left, t_right = resolved_movement_thresholds(
+        threshold_global=threshold_global,
+        threshold=threshold,
+        movement_thresholds=movement_thresholds,
+    )
+    hf = float(hysteresis_frac)
+    h_fwd, h_back = t_fwd * hf, t_back * hf
+    h_left, h_right = t_left * hf, t_right * hf
+
+    forward_on = (
+        ("forward" in prev and x <= neutral_x - t_fwd + h_fwd)
+        or ("forward" not in prev and x <= neutral_x - t_fwd)
+    )
+    backward_on = (
+        ("backward" in prev and x >= neutral_x + t_back - h_back)
+        or ("backward" not in prev and x >= neutral_x + t_back)
+    )
+    left_on = (
+        ("left" in prev and y <= neutral_y - t_left + h_left)
+        or ("left" not in prev and y <= neutral_y - t_left)
+    )
+    right_on = (
+        ("right" in prev and y >= neutral_y + t_right - h_right)
+        or ("right" not in prev and y >= neutral_y + t_right)
+    )
+
+    movements: set[str] = set()
+    if forward_on:
+        movements.add("forward")
+    elif backward_on:
+        movements.add("backward")
+
+    if left_on:
+        movements.add("left")
+    elif right_on:
+        movements.add("right")
+
+    return movements
+
+
 def mental_command_to_sets(
     com: Iterable,
     *,

@@ -49,6 +49,25 @@ def test_shared_physical_key_refcount(keyboard_controller):
     assert keyboard_controller.release.call_count == 1
 
 
+def test_sync_hold_repeated_sync_single_physical_press(keyboard_controller):
+    """Active movements map to one ``press`` until cleared; repeated sync must not re-press."""
+    from app import AppConfig, SimulatedKeyboard
+
+    kb = SimulatedKeyboard()
+    cfg = AppConfig()
+    cfg.keyboard_enabled = True
+    cfg.key_bindings["forward"] = "w"
+
+    kb.sync({"forward"}, set(), cfg)
+    kb.sync({"forward"}, set(), cfg)
+    kb.sync({"forward"}, set(), cfg)
+    assert keyboard_controller.press.call_count == 1
+    assert keyboard_controller.release.call_count == 0
+
+    kb.sync(set(), set(), cfg)
+    assert keyboard_controller.release.call_count == 1
+
+
 def test_sync_keyboard_disabled_releases_all(keyboard_controller):
     from app import AppConfig, SimulatedKeyboard
 

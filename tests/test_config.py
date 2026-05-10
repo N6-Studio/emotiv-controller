@@ -19,6 +19,28 @@ def test_appconfig_debug_mode_default():
     assert AppConfig().debug_mode is False
 
 
+def test_keyboard_motion_hysteresis_default_and_clamp():
+    from app import AppConfig
+    from core import DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC
+
+    assert AppConfig().keyboard_motion_hysteresis_frac == pytest.approx(
+        DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC
+    )
+    assert AppConfig(keyboard_motion_hysteresis_frac=-0.5).keyboard_motion_hysteresis_frac == 0.0
+    assert AppConfig(keyboard_motion_hysteresis_frac=9.0).keyboard_motion_hysteresis_frac == 1.0
+
+
+def test_keyboard_motion_hysteresis_round_trip(monkeypatch, tmp_path):
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    cfg = app_module.AppConfig(keyboard_motion_hysteresis_frac=0.25)
+    app_module.save_config(cfg)
+    loaded = app_module.load_config()
+    assert loaded.keyboard_motion_hysteresis_frac == pytest.approx(0.25)
+
+
 def test_minimal_config_round_trip(monkeypatch, tmp_path):
     import app as app_module
 

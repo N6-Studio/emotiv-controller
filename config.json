@@ -9,8 +9,9 @@
     "backward": 0.15,
     "right": 0.15
   },
-  "keyboard_enabled": false,
-  "keyboard_com_enabled": false,
+  "keyboard_enabled": true,
+  "keyboard_motion_hysteresis_frac": 0.4,
+  "keyboard_com_enabled": true,
   "debug_mode": false,
   "com_power_threshold": 0.2,
   "key_bindings": {
@@ -21,8 +22,8 @@
   },
   "com_key_bindings": {
     "push": "",
-    "pull": "e",
-    "lift": "r",
+    "pull": "",
+    "lift": "",
     "drop": "f"
   },
   "cortex_url": "ws://localhost:6868",

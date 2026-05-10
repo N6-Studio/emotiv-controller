@@ -11,6 +11,7 @@ from typing import Callable, Optional
 import websocket
 from core import (
     COM_MAPPED_MENTAL_ACTIONS,
+    DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC,
     compute_motion_movements,
     mental_command_to_sets,
 )
@@ -119,6 +120,7 @@ class AppConfig:
     threshold_global: bool = True
     movement_thresholds: dict = field(default_factory=dict)
     keyboard_enabled: bool = False
+    keyboard_motion_hysteresis_frac: float = DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC
     keyboard_com_enabled: bool = False
     debug_mode: bool = False
     com_power_threshold: float = DEFAULT_COM_POWER_THRESHOLD
@@ -164,6 +166,12 @@ class AppConfig:
                 self.emotiv_debit = int(str(self.emotiv_debit).strip())
             except (TypeError, ValueError):
                 self.emotiv_debit = 1
+        try:
+            hf = float(self.keyboard_motion_hysteresis_frac)
+        except (TypeError, ValueError):
+            hf = DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC
+        self.keyboard_motion_hysteresis_frac = max(0.0, min(1.0, hf))
+
 
 def load_config() -> AppConfig:
     path = _config_path()

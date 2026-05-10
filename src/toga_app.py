@@ -48,6 +48,7 @@ from core import (
     mot_to_motion_xy,
     resolved_movement_thresholds,
     reticle_offset_acc_to_normalized,
+    stable_keyboard_motion_movements,
 )
 from update_service import semver_less
 
@@ -197,6 +198,12 @@ class EmotivBridgeApp(toga.App):
         self.current_acc_x = 0.0
         # Pad highlights from mental commands (last ``com`` frame); head motion is recomputed each UI tick.
         self.com_pad_movements: set[str] = set()
+        # Last motion/COM applied to the simulated keyboard so split stream packets (mot-only vs com-only)
+        # do not release keys that should stay held until the next update for that stream.
+        self._keyboard_last_motion: set[str] = set()
+        self._keyboard_last_com_actions: set[str] = set()
+        # Schmitt state for motion→keyboard only (UI pad still uses instant thresholds).
+        self._keyboard_motion_stable: set[str] = set()
 
         self.calibration_active = False
         self.calibration_started_at: Optional[float] = None
@@ -345,6 +352,7 @@ class EmotivBridgeApp(toga.App):
 
     def _toggle_keyboard_via_shortcut(self) -> None:
         self.config_data.keyboard_enabled = not self.config_data.keyboard_enabled
+        self.config_data.keyboard_com_enabled = self.config_data.keyboard_enabled
         save_config(self.config_data)
         self.status_queue.put(
             "Keyboard presses on"
@@ -979,9 +987,7 @@ class EmotivBridgeApp(toga.App):
 
     def process_stream_message(self, msg: dict) -> None:
         has_input = False
-        motion_detected: set[str] = set()
         com_movements: set[str] = set()
-        com_actions: set[str] = set()
 
         if isinstance(msg.get("mot"), list):
             has_input = True
@@ -993,7 +999,24 @@ class EmotivBridgeApp(toga.App):
                 px, py = mot_to_motion_xy(mot, mot_cols)
                 self.current_x = px
                 self.current_y = py
-                motion_detected.update(self.map_motion(self.current_x, self.current_y))
+                nx = self.get_active_neutral_x()
+                ny = self.get_active_neutral_y()
+                if nx is None or ny is None:
+                    self._keyboard_motion_stable = set()
+                else:
+                    cfg = self.config_data
+                    self._keyboard_motion_stable = stable_keyboard_motion_movements(
+                        x=self.current_x,
+                        y=self.current_y,
+                        neutral_x=float(nx),
+                        neutral_y=float(ny),
+                        prev=self._keyboard_motion_stable,
+                        threshold_global=cfg.threshold_global,
+                        threshold=float(cfg.threshold),
+                        movement_thresholds=cfg.movement_thresholds,
+                        hysteresis_frac=float(cfg.keyboard_motion_hysteresis_frac),
+                    )
+                self._keyboard_last_motion = set(self._keyboard_motion_stable)
 
         if isinstance(msg.get("com"), list):
             has_input = True
@@ -1006,13 +1029,17 @@ class EmotivBridgeApp(toga.App):
                 self.com_powers[action] = power
             cm, ca = self.map_mental_command(com)
             com_movements.update(cm)
-            com_actions.update(ca)
+            self._keyboard_last_com_actions = set(ca)
             self.com_pad_movements = set(com_movements)
 
         if not has_input:
             return
 
-        self.sim_keyboard.sync(motion_detected, com_actions, self.config_data)
+        self.sim_keyboard.sync(
+            self._keyboard_last_motion,
+            self._keyboard_last_com_actions,
+            self.config_data,
+        )
 
         if self.calibration_active:
             self.calibration_samples.append(
@@ -1430,6 +1457,9 @@ class EmotivBridgeApp(toga.App):
             return
         self._shutdown_complete = True
         self.sim_keyboard.release_all(self.config_data)
+        self._keyboard_last_motion.clear()
+        self._keyboard_last_com_actions.clear()
+        self._keyboard_motion_stable.clear()
         if self.cortex is not None:
             try:
                 self.cortex.stop()

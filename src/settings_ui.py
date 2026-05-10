@@ -88,7 +88,32 @@ def build_motion_tab(
     box.add(kb_sw)
     box.add(
         toga.Label(
-            "Shortcut: Ctrl + Shift + K · or Ctrl + Alt + K if the first is in use",
+            "Shortcut: Ctrl + Shift + K · or Ctrl + Alt + K if the first is in use "
+            "(turns motion and mental keyboard presses on or off together)",
+            style=pack_muted_small(padding_bottom=12),
+        )
+    )
+
+    hysteresis_row = toga.Box(style=Pack(direction=ROW, padding_top=4))
+    hysteresis_row.add(
+        toga.Label(
+            "Keyboard motion hysteresis",
+            style=Pack(flex=1),
+        )
+    )
+    hysteresis_input = toga.NumberInput(
+        min=0.0,
+        max=1.0,
+        step=0.05,
+        value=float(config_data.keyboard_motion_hysteresis_frac),
+        style=Pack(width=100),
+    )
+    hysteresis_row.add(hysteresis_input)
+    box.add(hysteresis_row)
+    box.add(
+        toga.Label(
+            "Fraction of each movement threshold used as deadband for simulated keys "
+            "(0 = none, higher = fewer rapid press/release cycles near the edges).",
             style=pack_muted_small(padding_bottom=12),
         )
     )
@@ -153,6 +178,7 @@ def build_motion_tab(
 
     def save_motion(widget: Optional[toga.Widget] = None) -> None:
         config_data.keyboard_enabled = bool(kb_sw.value)
+        config_data.keyboard_motion_hysteresis_frac = float(hysteresis_input.value)
         config_data.threshold_global = bool(tg_sw.value)
         config_data.threshold = float(thr_global.value)
         for m, inp in per_inputs.items():
@@ -179,7 +205,8 @@ def build_mental_tab(
     box.add(kb_com_sw)
     box.add(
         toga.Label(
-            "Only applies when keyboard presses are on. Tilt keys are unchanged.",
+            "Only applies when motion keyboard presses are on. "
+            "Ctrl+Shift+K (or Ctrl+Alt+K) toggles motion and mental presses together.",
             style=pack_muted_small(padding_bottom=12),
         )
     )
