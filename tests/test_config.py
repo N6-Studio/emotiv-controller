@@ -19,6 +19,42 @@ def test_appconfig_debug_mode_default():
     assert AppConfig().debug_mode is False
 
 
+def test_keyboard_key_mode_defaults():
+    from app import AppConfig
+    from bridge_core import KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS
+
+    cfg = AppConfig()
+    assert cfg.keyboard_motion_key_mode == KEYBOARD_KEY_MODE_HOLD
+    assert cfg.keyboard_mental_key_mode == KEYBOARD_KEY_MODE_PRESS
+    assert cfg.keyboard_motion_key_modes == {}
+    assert cfg.keyboard_mental_key_modes == {}
+
+
+def test_keyboard_key_mode_invalid_globals_normalized():
+    from app import AppConfig
+    from bridge_core import KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS
+
+    cfg = AppConfig(keyboard_motion_key_mode="bogus", keyboard_mental_key_mode="")
+    assert cfg.keyboard_motion_key_mode == KEYBOARD_KEY_MODE_HOLD
+    assert cfg.keyboard_mental_key_mode == KEYBOARD_KEY_MODE_PRESS
+
+
+def test_keyboard_per_key_modes_merge_and_strip_unknown():
+    from app import AppConfig
+    from bridge_core import KEYBOARD_KEY_MODE_PRESS
+
+    cfg = AppConfig(
+        keyboard_motion_key_modes={
+            "forward": "press",
+            "left": "invalid",
+            "phantom": "press",
+        },
+        keyboard_mental_key_modes={"push": "hold", "pull": "nope", "extra": "hold"},
+    )
+    assert cfg.keyboard_motion_key_modes == {"forward": KEYBOARD_KEY_MODE_PRESS}
+    assert cfg.keyboard_mental_key_modes == {"push": "hold"}
+
+
 def test_keyboard_motion_hysteresis_default_and_clamp():
     from app import AppConfig
     from core import DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC

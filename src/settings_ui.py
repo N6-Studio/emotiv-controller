@@ -9,6 +9,8 @@ from bridge_core import (
     APP_ENV_UI_KEYS,
     COM_MAPPED_MENTAL_ACTIONS,
     CONFIG_PATH,
+    KEYBOARD_KEY_MODE_HOLD,
+    KEYBOARD_KEY_MODE_PRESS,
     MOVEMENTS,
     AppConfig,
     app_env_form_values,
@@ -18,6 +20,20 @@ from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
 from ui_theme import pack_action_button, pack_muted_small
+
+
+def _key_mode_word(mode: str) -> str:
+    return "Press" if mode == KEYBOARD_KEY_MODE_PRESS else "Hold"
+
+
+def inherit_key_mode_option_label(global_mode: str) -> str:
+    """First option in per-key mode selectors (matches saved global default)."""
+    return f"(Default: {_key_mode_word(global_mode)})"
+
+
+def is_inherit_key_mode_selection(value: object) -> bool:
+    s = str(value or "").strip()
+    return s.startswith("(Default")
 
 
 def settings_tab_save_row(on_save: Callable[[Optional[toga.Widget]], None]) -> toga.Box:
@@ -94,27 +110,27 @@ def build_motion_tab(
         )
     )
 
-    hysteresis_row = toga.Box(style=Pack(direction=ROW, padding_top=4))
-    hysteresis_row.add(
+    mode_sel_pack = Pack(width=168)
+    motion_mode_global = toga.Selection(
+        items=["Hold", "Press"],
+        value="Hold"
+        if config_data.keyboard_motion_key_mode == KEYBOARD_KEY_MODE_HOLD
+        else "Press",
+        style=mode_sel_pack,
+    )
+    motion_mode_row = toga.Box(style=Pack(direction=ROW, padding_top=8))
+    motion_mode_row.add(
         toga.Label(
-            "Keyboard motion hysteresis",
+            "Default motion key behavior",
             style=Pack(flex=1),
         )
     )
-    hysteresis_input = toga.NumberInput(
-        min=0.0,
-        max=1.0,
-        step=0.05,
-        value=float(config_data.keyboard_motion_hysteresis_frac),
-        style=Pack(width=100),
-    )
-    hysteresis_row.add(hysteresis_input)
-    box.add(hysteresis_row)
+    motion_mode_row.add(motion_mode_global)
+    box.add(motion_mode_row)
     box.add(
         toga.Label(
-            "Fraction of each movement threshold used as deadband for simulated keys "
-            "(0 = none, higher = fewer rapid press/release cycles near the edges).",
-            style=pack_muted_small(padding_bottom=12),
+            "Hold: keep key down while leaning. Press: tap once each time a direction activates.",
+            style=pack_muted_small(padding_bottom=8),
         )
     )
 
@@ -125,6 +141,8 @@ def build_motion_tab(
         )
     )
     motion_entries: dict[str, toga.TextInput] = {}
+    motion_mode_per: dict[str, toga.Selection] = {}
+    motion_inherit_label = inherit_key_mode_option_label(config_data.keyboard_motion_key_mode)
     for movement in MOVEMENTS:
         row = toga.Box(style=Pack(direction=ROW, padding_top=4))
         row.add(
@@ -141,8 +159,38 @@ def build_motion_tab(
             style=Pack(flex=1),
         )
         row.add(te)
+        ov = config_data.keyboard_motion_key_modes.get(movement)
+        if ov == KEYBOARD_KEY_MODE_PRESS:
+            msel_val = "Press"
+        elif ov == KEYBOARD_KEY_MODE_HOLD:
+            msel_val = "Hold"
+        else:
+            msel_val = motion_inherit_label
+        msel = toga.Selection(
+            items=[motion_inherit_label, "Hold", "Press"],
+            value=msel_val,
+            style=mode_sel_pack,
+        )
+        motion_mode_per[movement] = msel
+        row.add(msel)
         box.add(row)
         motion_entries[movement] = te
+
+    def refresh_motion_per_inherit_labels(widget: Optional[toga.Widget] = None) -> None:
+        mode = (
+            KEYBOARD_KEY_MODE_PRESS
+            if motion_mode_global.value == "Press"
+            else KEYBOARD_KEY_MODE_HOLD
+        )
+        label = inherit_key_mode_option_label(mode)
+        for sel in motion_mode_per.values():
+            cur = sel.value
+            using_default = is_inherit_key_mode_selection(cur)
+            sel.items = [label, "Hold", "Press"]
+            sel.value = label if using_default else cur
+
+    motion_mode_global.on_change = refresh_motion_per_inherit_labels
+
     box.add(
         toga.Label(
             "Single character or pynput key name (e.g. w, left). Leave blank to restore default.",
@@ -206,6 +254,30 @@ def build_motion_tab(
     tg_sw.on_change = lambda w: refresh_threshold_mode()
     refresh_threshold_mode()
 
+    hysteresis_row = toga.Box(style=Pack(direction=ROW, padding_top=12))
+    hysteresis_row.add(
+        toga.Label(
+            "Keyboard motion hysteresis",
+            style=Pack(flex=1),
+        )
+    )
+    hysteresis_input = toga.NumberInput(
+        min=0.0,
+        max=1.0,
+        step=0.05,
+        value=float(config_data.keyboard_motion_hysteresis_frac),
+        style=Pack(width=100),
+    )
+    hysteresis_row.add(hysteresis_input)
+    box.add(hysteresis_row)
+    box.add(
+        toga.Label(
+            "Fraction of each movement threshold used as deadband for simulated keys "
+            "(0 = none, higher = fewer rapid press/release cycles near the edges).",
+            style=pack_muted_small(padding_bottom=12),
+        )
+    )
+
     box.add(toga.Box(style=Pack(flex=1)))
 
     def save_motion(widget: Optional[toga.Widget] = None) -> None:
@@ -216,6 +288,18 @@ def build_motion_tab(
             if not s:
                 s = MOVEMENTS[movement]["default_key"]
             config_data.key_bindings[movement] = s
+        config_data.keyboard_motion_key_mode = (
+            KEYBOARD_KEY_MODE_PRESS
+            if motion_mode_global.value == "Press"
+            else KEYBOARD_KEY_MODE_HOLD
+        )
+        mm: dict[str, str] = {}
+        for movement in MOVEMENTS:
+            sel = motion_mode_per[movement].value
+            if is_inherit_key_mode_selection(sel):
+                continue
+            mm[movement] = KEYBOARD_KEY_MODE_PRESS if sel == "Press" else KEYBOARD_KEY_MODE_HOLD
+        config_data.keyboard_motion_key_modes = mm
         config_data.threshold_global = bool(tg_sw.value)
         config_data.threshold = float(thr_global.value)
         for m, inp in per_inputs.items():
@@ -261,13 +345,40 @@ def build_mental_tab(
     com_row.add(com_thr)
     box.add(com_row)
 
+    mental_mode_sel_pack = Pack(width=168)
+    mental_mode_global = toga.Selection(
+        items=["Hold", "Press"],
+        value="Hold"
+        if config_data.keyboard_mental_key_mode == KEYBOARD_KEY_MODE_HOLD
+        else "Press",
+        style=mental_mode_sel_pack,
+    )
+    mental_mode_row = toga.Box(style=Pack(direction=ROW, padding_top=12))
+    mental_mode_row.add(
+        toga.Label(
+            "Default mental key behavior",
+            style=Pack(flex=1),
+        )
+    )
+    mental_mode_row.add(mental_mode_global)
+    box.add(mental_mode_row)
     box.add(
         toga.Label(
-            "Mental command keys (held while COM power is above threshold)",
+            "Hold: key stays down while the command is active above the power threshold. "
+            "Press: tap once when the command crosses the threshold.",
+            style=pack_muted_small(padding_bottom=8),
+        )
+    )
+
+    box.add(
+        toga.Label(
+            "Mental command keys",
             style=pack_muted_small(padding_top=12, padding_bottom=4),
         )
     )
     com_entries: dict[str, toga.TextInput] = {}
+    mental_mode_per: dict[str, toga.Selection] = {}
+    mental_inherit_label = inherit_key_mode_option_label(config_data.keyboard_mental_key_mode)
     for cmd in COM_MAPPED_MENTAL_ACTIONS:
         row = toga.Box(style=Pack(direction=ROW, padding_top=4))
         row.add(toga.Label(cmd, style=Pack(width=80)))
@@ -276,8 +387,37 @@ def build_mental_tab(
             style=Pack(flex=1),
         )
         row.add(te)
+        ov_m = config_data.keyboard_mental_key_modes.get(cmd)
+        if ov_m == KEYBOARD_KEY_MODE_PRESS:
+            msel_val = "Press"
+        elif ov_m == KEYBOARD_KEY_MODE_HOLD:
+            msel_val = "Hold"
+        else:
+            msel_val = mental_inherit_label
+        msel = toga.Selection(
+            items=[mental_inherit_label, "Hold", "Press"],
+            value=msel_val,
+            style=mental_mode_sel_pack,
+        )
+        mental_mode_per[cmd] = msel
+        row.add(msel)
         box.add(row)
         com_entries[cmd] = te
+
+    def refresh_mental_per_inherit_labels(widget: Optional[toga.Widget] = None) -> None:
+        mode = (
+            KEYBOARD_KEY_MODE_PRESS
+            if mental_mode_global.value == "Press"
+            else KEYBOARD_KEY_MODE_HOLD
+        )
+        label = inherit_key_mode_option_label(mode)
+        for sel in mental_mode_per.values():
+            cur = sel.value
+            using_default = is_inherit_key_mode_selection(cur)
+            sel.items = [label, "Hold", "Press"]
+            sel.value = label if using_default else cur
+
+    mental_mode_global.on_change = refresh_mental_per_inherit_labels
 
     box.add(toga.Box(style=Pack(flex=1)))
 
@@ -286,6 +426,18 @@ def build_mental_tab(
         config_data.com_power_threshold = float(com_thr.value)
         for cmd in COM_MAPPED_MENTAL_ACTIONS:
             config_data.com_key_bindings[cmd] = com_entries[cmd].value.strip()
+        config_data.keyboard_mental_key_mode = (
+            KEYBOARD_KEY_MODE_PRESS
+            if mental_mode_global.value == "Press"
+            else KEYBOARD_KEY_MODE_HOLD
+        )
+        cm: dict[str, str] = {}
+        for cmd in COM_MAPPED_MENTAL_ACTIONS:
+            sel = mental_mode_per[cmd].value
+            if is_inherit_key_mode_selection(sel):
+                continue
+            cm[cmd] = KEYBOARD_KEY_MODE_PRESS if sel == "Press" else KEYBOARD_KEY_MODE_HOLD
+        config_data.keyboard_mental_key_modes = cm
         on_save()
 
     box.add(settings_tab_save_row(save_mental))

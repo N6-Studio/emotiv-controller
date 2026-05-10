@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from queue import Queue, Empty
-from typing import Callable, Optional
+from typing import Callable, Container, Optional
 
 import websocket
 from core import (
@@ -66,6 +66,38 @@ DEFAULT_COM_KEY_BINDINGS = {
     "lift": "r",
     "drop": "f",
 }
+
+KEYBOARD_KEY_MODE_HOLD = "hold"
+KEYBOARD_KEY_MODE_PRESS = "press"
+DEFAULT_KEYBOARD_MOTION_KEY_MODE = KEYBOARD_KEY_MODE_HOLD
+DEFAULT_KEYBOARD_MENTAL_KEY_MODE = KEYBOARD_KEY_MODE_PRESS
+
+
+def _normalize_keyboard_key_mode(value: object, default: str) -> str:
+    try:
+        s = str(value).strip().lower()
+    except (TypeError, ValueError):
+        return default
+    if s in (KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS):
+        return s
+    return default
+
+
+def _merge_per_key_keyboard_modes(raw: object, allowed: Container[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for k in allowed:
+        if k not in raw:
+            continue
+        v = raw[k]
+        try:
+            s = str(v).strip().lower()
+        except (TypeError, ValueError):
+            continue
+        if s in (KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS):
+            out[str(k)] = s
+    return out
 
 # Labels for the Cortex connection settings form (values live on ``AppConfig``).
 APP_ENV_UI_KEYS = [
@@ -132,6 +164,10 @@ class AppConfig:
     emotiv_client_secret: str = ""
     emotiv_license: str = ""
     emotiv_debit: int = 1
+    keyboard_motion_key_mode: str = DEFAULT_KEYBOARD_MOTION_KEY_MODE
+    keyboard_mental_key_mode: str = DEFAULT_KEYBOARD_MENTAL_KEY_MODE
+    keyboard_motion_key_modes: dict = field(default_factory=dict)
+    keyboard_mental_key_modes: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.key_bindings is None:
@@ -171,6 +207,22 @@ class AppConfig:
         except (TypeError, ValueError):
             hf = DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC
         self.keyboard_motion_hysteresis_frac = max(0.0, min(1.0, hf))
+        self.keyboard_motion_key_mode = _normalize_keyboard_key_mode(
+            self.keyboard_motion_key_mode, DEFAULT_KEYBOARD_MOTION_KEY_MODE
+        )
+        self.keyboard_mental_key_mode = _normalize_keyboard_key_mode(
+            self.keyboard_mental_key_mode, DEFAULT_KEYBOARD_MENTAL_KEY_MODE
+        )
+        mm_raw = self.keyboard_motion_key_modes
+        if mm_raw is None:
+            mm_raw = {}
+        self.keyboard_motion_key_modes = _merge_per_key_keyboard_modes(mm_raw, MOVEMENTS)
+        cm_raw = self.keyboard_mental_key_modes
+        if cm_raw is None:
+            cm_raw = {}
+        self.keyboard_mental_key_modes = _merge_per_key_keyboard_modes(
+            cm_raw, COM_MAPPED_MENTAL_ACTIONS
+        )
 
 
 def load_config() -> AppConfig:
@@ -271,12 +323,28 @@ def apply_cortex_env_form_to_config(config: AppConfig, values: dict[str, str]) -
         config.emotiv_debit = 1
 
 
+def _resolved_motion_key_mode(movement: str, config: AppConfig) -> str:
+    o = config.keyboard_motion_key_modes.get(movement)
+    if o in (KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS):
+        return o
+    return config.keyboard_motion_key_mode
+
+
+def _resolved_mental_key_mode(action: str, config: AppConfig) -> str:
+    o = config.keyboard_mental_key_modes.get(action)
+    if o in (KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS):
+        return o
+    return config.keyboard_mental_key_mode
+
+
 class SimulatedKeyboard:
     def __init__(self):
         self.controller = _pynput_keyboard().Controller()
         self.pressed_movements = set()
         self.pressed_com_actions = set()
         self._key_refcount: dict[str, int] = {}
+        self._tap_prev_motion: Optional[set] = None
+        self._tap_prev_com: Optional[set] = None
 
     def _add_physical_key(self, key: str):
         n = self._key_refcount.get(key, 0) + 1
@@ -321,6 +389,10 @@ class SimulatedKeyboard:
         self._remove_physical_key(key)
         self.pressed_com_actions.remove(action)
 
+    def _tap_physical_key(self, key: str):
+        self._add_physical_key(key)
+        self._remove_physical_key(key)
+
     def sync(
         self,
         motion_movements: set,
@@ -331,21 +403,47 @@ class SimulatedKeyboard:
             self.release_all(config)
             return
 
-        for movement, key in config.key_bindings.items():
-            if movement in motion_movements:
-                self.press(movement, key)
-            else:
-                self.release(movement, key)
-
         effective_com = com_actions if config.keyboard_com_enabled else set()
+
+        prev_m = self._tap_prev_motion
+        prev_c = self._tap_prev_com
+        prev_motion_eff = prev_m if prev_m is not None else motion_movements
+        prev_com_eff = prev_c if prev_c is not None else effective_com
+
+        for movement in MOVEMENTS:
+            key = config.key_bindings.get(movement)
+            if not key:
+                continue
+            mode = _resolved_motion_key_mode(movement, config)
+            if mode == KEYBOARD_KEY_MODE_PRESS:
+                if movement in self.pressed_movements:
+                    self.release(movement, key)
+                if movement in motion_movements and movement not in prev_motion_eff:
+                    self._tap_physical_key(key)
+            else:
+                if movement in motion_movements:
+                    self.press(movement, key)
+                else:
+                    self.release(movement, key)
+
         for action in COM_MAPPED_MENTAL_ACTIONS:
             key = config.com_key_bindings.get(action)
             if not key:
                 continue
-            if action in effective_com:
-                self.press_com(action, key)
+            mode = _resolved_mental_key_mode(action, config)
+            if mode == KEYBOARD_KEY_MODE_PRESS:
+                if action in self.pressed_com_actions:
+                    self.release_com(action, key)
+                if action in effective_com and action not in prev_com_eff:
+                    self._tap_physical_key(key)
             else:
-                self.release_com(action, key)
+                if action in effective_com:
+                    self.press_com(action, key)
+                else:
+                    self.release_com(action, key)
+
+        self._tap_prev_motion = set(motion_movements)
+        self._tap_prev_com = set(effective_com)
 
     def release_all(self, config: AppConfig):
         for movement in list(self.pressed_movements):
@@ -356,6 +454,8 @@ class SimulatedKeyboard:
             key = config.com_key_bindings.get(action)
             if key:
                 self.release_com(action, key)
+        self._tap_prev_motion = None
+        self._tap_prev_com = None
 
 
 class CortexClient(threading.Thread):
