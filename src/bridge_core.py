@@ -69,8 +69,19 @@ DEFAULT_COM_KEY_BINDINGS = {
 
 KEYBOARD_KEY_MODE_HOLD = "hold"
 KEYBOARD_KEY_MODE_PRESS = "press"
+KEYBOARD_KEY_MODE_SPAM = "spam"
 DEFAULT_KEYBOARD_MOTION_KEY_MODE = KEYBOARD_KEY_MODE_HOLD
 DEFAULT_KEYBOARD_MENTAL_KEY_MODE = KEYBOARD_KEY_MODE_PRESS
+
+DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS = 100
+MIN_KEYBOARD_REPEAT_INTERVAL_MS = 10
+MAX_KEYBOARD_REPEAT_INTERVAL_MS = 5000
+
+_VALID_KEYBOARD_KEY_MODES = (
+    KEYBOARD_KEY_MODE_HOLD,
+    KEYBOARD_KEY_MODE_PRESS,
+    KEYBOARD_KEY_MODE_SPAM,
+)
 
 
 def _normalize_keyboard_key_mode(value: object, default: str) -> str:
@@ -78,7 +89,7 @@ def _normalize_keyboard_key_mode(value: object, default: str) -> str:
         s = str(value).strip().lower()
     except (TypeError, ValueError):
         return default
-    if s in (KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS):
+    if s in _VALID_KEYBOARD_KEY_MODES:
         return s
     return default
 
@@ -95,9 +106,35 @@ def _merge_per_key_keyboard_modes(raw: object, allowed: Container[str]) -> dict[
             s = str(v).strip().lower()
         except (TypeError, ValueError):
             continue
-        if s in (KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS):
+        if s in _VALID_KEYBOARD_KEY_MODES:
             out[str(k)] = s
     return out
+
+
+def _coerce_repeat_interval_ms(value: object) -> Optional[int]:
+    """Coerce ``value`` to a positive int milliseconds, clamped to the allowed range."""
+    if isinstance(value, bool):
+        return None
+    try:
+        iv = int(value)
+    except (TypeError, ValueError):
+        try:
+            iv = int(float(value))
+        except (TypeError, ValueError):
+            return None
+    if iv <= 0:
+        return None
+    if iv < MIN_KEYBOARD_REPEAT_INTERVAL_MS:
+        iv = MIN_KEYBOARD_REPEAT_INTERVAL_MS
+    elif iv > MAX_KEYBOARD_REPEAT_INTERVAL_MS:
+        iv = MAX_KEYBOARD_REPEAT_INTERVAL_MS
+    return iv
+
+
+def _clamp_default_repeat_interval_ms(value: object) -> int:
+    iv = _coerce_repeat_interval_ms(value)
+    return iv if iv is not None else DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS
+
 
 # Labels for the Cortex connection settings form (values live on ``AppConfig``).
 APP_ENV_UI_KEYS = [
@@ -168,6 +205,8 @@ class AppConfig:
     keyboard_mental_key_mode: str = DEFAULT_KEYBOARD_MENTAL_KEY_MODE
     keyboard_motion_key_modes: dict = field(default_factory=dict)
     keyboard_mental_key_modes: dict = field(default_factory=dict)
+    keyboard_motion_repeat_interval_ms: int = DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS
+    keyboard_mental_repeat_interval_ms: int = DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS
 
     def __post_init__(self):
         if self.key_bindings is None:
@@ -222,6 +261,12 @@ class AppConfig:
             cm_raw = {}
         self.keyboard_mental_key_modes = _merge_per_key_keyboard_modes(
             cm_raw, COM_MAPPED_MENTAL_ACTIONS
+        )
+        self.keyboard_motion_repeat_interval_ms = _clamp_default_repeat_interval_ms(
+            self.keyboard_motion_repeat_interval_ms
+        )
+        self.keyboard_mental_repeat_interval_ms = _clamp_default_repeat_interval_ms(
+            self.keyboard_mental_repeat_interval_ms
         )
 
 
@@ -325,26 +370,29 @@ def apply_cortex_env_form_to_config(config: AppConfig, values: dict[str, str]) -
 
 def _resolved_motion_key_mode(movement: str, config: AppConfig) -> str:
     o = config.keyboard_motion_key_modes.get(movement)
-    if o in (KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS):
+    if o in _VALID_KEYBOARD_KEY_MODES:
         return o
     return config.keyboard_motion_key_mode
 
 
 def _resolved_mental_key_mode(action: str, config: AppConfig) -> str:
     o = config.keyboard_mental_key_modes.get(action)
-    if o in (KEYBOARD_KEY_MODE_HOLD, KEYBOARD_KEY_MODE_PRESS):
+    if o in _VALID_KEYBOARD_KEY_MODES:
         return o
     return config.keyboard_mental_key_mode
 
 
 class SimulatedKeyboard:
-    def __init__(self):
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic):
         self.controller = _pynput_keyboard().Controller()
         self.pressed_movements = set()
         self.pressed_com_actions = set()
         self._key_refcount: dict[str, int] = {}
         self._tap_prev_motion: Optional[set] = None
         self._tap_prev_com: Optional[set] = None
+        self._clock = clock
+        self._repeat_last_tap_motion: dict[str, float] = {}
+        self._repeat_last_tap_com: dict[str, float] = {}
 
     def _add_physical_key(self, key: str):
         n = self._key_refcount.get(key, 0) + 1
@@ -420,6 +468,19 @@ class SimulatedKeyboard:
                     self.release(movement, key)
                 if movement in motion_movements and movement not in prev_motion_eff:
                     self._tap_physical_key(key)
+            elif mode == KEYBOARD_KEY_MODE_SPAM:
+                if movement in self.pressed_movements:
+                    self.release(movement, key)
+                if movement in motion_movements:
+                    now = self._clock()
+                    last = self._repeat_last_tap_motion.get(movement)
+                    rising = movement not in prev_motion_eff
+                    interval_s = int(config.keyboard_motion_repeat_interval_ms) / 1000.0
+                    if rising or (last is not None and (now - last) >= interval_s):
+                        self._tap_physical_key(key)
+                        self._repeat_last_tap_motion[movement] = now
+                else:
+                    self._repeat_last_tap_motion.pop(movement, None)
             else:
                 if movement in motion_movements:
                     self.press(movement, key)
@@ -436,6 +497,19 @@ class SimulatedKeyboard:
                     self.release_com(action, key)
                 if action in effective_com and action not in prev_com_eff:
                     self._tap_physical_key(key)
+            elif mode == KEYBOARD_KEY_MODE_SPAM:
+                if action in self.pressed_com_actions:
+                    self.release_com(action, key)
+                if action in effective_com:
+                    now = self._clock()
+                    last = self._repeat_last_tap_com.get(action)
+                    rising = action not in prev_com_eff
+                    interval_s = int(config.keyboard_mental_repeat_interval_ms) / 1000.0
+                    if rising or (last is not None and (now - last) >= interval_s):
+                        self._tap_physical_key(key)
+                        self._repeat_last_tap_com[action] = now
+                else:
+                    self._repeat_last_tap_com.pop(action, None)
             else:
                 if action in effective_com:
                     self.press_com(action, key)
@@ -456,6 +530,8 @@ class SimulatedKeyboard:
                 self.release_com(action, key)
         self._tap_prev_motion = None
         self._tap_prev_com = None
+        self._repeat_last_tap_motion.clear()
+        self._repeat_last_tap_com.clear()
 
 
 class CortexClient(threading.Thread):

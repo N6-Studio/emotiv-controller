@@ -11,6 +11,9 @@ from bridge_core import (
     CONFIG_PATH,
     KEYBOARD_KEY_MODE_HOLD,
     KEYBOARD_KEY_MODE_PRESS,
+    KEYBOARD_KEY_MODE_SPAM,
+    MAX_KEYBOARD_REPEAT_INTERVAL_MS,
+    MIN_KEYBOARD_REPEAT_INTERVAL_MS,
     MOVEMENTS,
     AppConfig,
     app_env_form_values,
@@ -22,8 +25,20 @@ from toga.style.pack import COLUMN, ROW
 from ui_theme import pack_action_button, pack_muted_small
 
 
+_KEY_MODE_LABELS = {
+    KEYBOARD_KEY_MODE_HOLD: "Hold",
+    KEYBOARD_KEY_MODE_PRESS: "Press",
+    KEYBOARD_KEY_MODE_SPAM: "Spam",
+}
+_KEY_MODE_FROM_LABEL = {v: k for k, v in _KEY_MODE_LABELS.items()}
+
+
 def _key_mode_word(mode: str) -> str:
-    return "Press" if mode == KEYBOARD_KEY_MODE_PRESS else "Hold"
+    return _KEY_MODE_LABELS.get(mode, "Hold")
+
+
+def _mode_from_label(label: object) -> str:
+    return _KEY_MODE_FROM_LABEL.get(str(label), KEYBOARD_KEY_MODE_HOLD)
 
 
 def inherit_key_mode_option_label(global_mode: str) -> str:
@@ -111,11 +126,10 @@ def build_motion_tab(
     )
 
     mode_sel_pack = Pack(width=168)
+    interval_input_pack = Pack(width=90)
     motion_mode_global = toga.Selection(
-        items=["Hold", "Press"],
-        value="Hold"
-        if config_data.keyboard_motion_key_mode == KEYBOARD_KEY_MODE_HOLD
-        else "Press",
+        items=["Hold", "Press", "Spam"],
+        value=_key_mode_word(config_data.keyboard_motion_key_mode),
         style=mode_sel_pack,
     )
     motion_mode_row = toga.Box(style=Pack(direction=ROW, padding_top=8))
@@ -129,7 +143,32 @@ def build_motion_tab(
     box.add(motion_mode_row)
     box.add(
         toga.Label(
-            "Hold: keep key down while leaning. Press: tap once each time a direction activates.",
+            "Hold: keep key down while leaning. "
+            "Press: tap once each time a direction activates. "
+            "Spam: re-tap at the configured interval while above threshold.",
+            style=pack_muted_small(padding_bottom=8),
+        )
+    )
+
+    motion_repeat_default_row = toga.Box(style=Pack(direction=ROW, padding_top=4))
+    motion_repeat_default_row.add(
+        toga.Label(
+            "Spam interval (ms)",
+            style=Pack(flex=1),
+        )
+    )
+    motion_repeat_default = toga.NumberInput(
+        min=MIN_KEYBOARD_REPEAT_INTERVAL_MS,
+        max=MAX_KEYBOARD_REPEAT_INTERVAL_MS,
+        step=10,
+        value=int(config_data.keyboard_motion_repeat_interval_ms),
+        style=interval_input_pack,
+    )
+    motion_repeat_default_row.add(motion_repeat_default)
+    box.add(motion_repeat_default_row)
+    box.add(
+        toga.Label(
+            "Used for all motion keys whose behavior is Spam.",
             style=pack_muted_small(padding_bottom=8),
         )
     )
@@ -160,14 +199,12 @@ def build_motion_tab(
         )
         row.add(te)
         ov = config_data.keyboard_motion_key_modes.get(movement)
-        if ov == KEYBOARD_KEY_MODE_PRESS:
-            msel_val = "Press"
-        elif ov == KEYBOARD_KEY_MODE_HOLD:
-            msel_val = "Hold"
+        if ov in _KEY_MODE_LABELS:
+            msel_val = _key_mode_word(ov)
         else:
             msel_val = motion_inherit_label
         msel = toga.Selection(
-            items=[motion_inherit_label, "Hold", "Press"],
+            items=[motion_inherit_label, "Hold", "Press", "Spam"],
             value=msel_val,
             style=mode_sel_pack,
         )
@@ -177,16 +214,12 @@ def build_motion_tab(
         motion_entries[movement] = te
 
     def refresh_motion_per_inherit_labels(widget: Optional[toga.Widget] = None) -> None:
-        mode = (
-            KEYBOARD_KEY_MODE_PRESS
-            if motion_mode_global.value == "Press"
-            else KEYBOARD_KEY_MODE_HOLD
-        )
+        mode = _mode_from_label(motion_mode_global.value)
         label = inherit_key_mode_option_label(mode)
         for sel in motion_mode_per.values():
             cur = sel.value
             using_default = is_inherit_key_mode_selection(cur)
-            sel.items = [label, "Hold", "Press"]
+            sel.items = [label, "Hold", "Press", "Spam"]
             sel.value = label if using_default else cur
 
     motion_mode_global.on_change = refresh_motion_per_inherit_labels
@@ -288,18 +321,20 @@ def build_motion_tab(
             if not s:
                 s = MOVEMENTS[movement]["default_key"]
             config_data.key_bindings[movement] = s
-        config_data.keyboard_motion_key_mode = (
-            KEYBOARD_KEY_MODE_PRESS
-            if motion_mode_global.value == "Press"
-            else KEYBOARD_KEY_MODE_HOLD
-        )
+        config_data.keyboard_motion_key_mode = _mode_from_label(motion_mode_global.value)
         mm: dict[str, str] = {}
         for movement in MOVEMENTS:
             sel = motion_mode_per[movement].value
             if is_inherit_key_mode_selection(sel):
                 continue
-            mm[movement] = KEYBOARD_KEY_MODE_PRESS if sel == "Press" else KEYBOARD_KEY_MODE_HOLD
+            mm[movement] = _mode_from_label(sel)
         config_data.keyboard_motion_key_modes = mm
+        try:
+            config_data.keyboard_motion_repeat_interval_ms = int(
+                motion_repeat_default.value
+            )
+        except (TypeError, ValueError):
+            pass
         config_data.threshold_global = bool(tg_sw.value)
         config_data.threshold = float(thr_global.value)
         for m, inp in per_inputs.items():
@@ -346,11 +381,10 @@ def build_mental_tab(
     box.add(com_row)
 
     mental_mode_sel_pack = Pack(width=168)
+    mental_interval_input_pack = Pack(width=90)
     mental_mode_global = toga.Selection(
-        items=["Hold", "Press"],
-        value="Hold"
-        if config_data.keyboard_mental_key_mode == KEYBOARD_KEY_MODE_HOLD
-        else "Press",
+        items=["Hold", "Press", "Spam"],
+        value=_key_mode_word(config_data.keyboard_mental_key_mode),
         style=mental_mode_sel_pack,
     )
     mental_mode_row = toga.Box(style=Pack(direction=ROW, padding_top=12))
@@ -365,7 +399,31 @@ def build_mental_tab(
     box.add(
         toga.Label(
             "Hold: key stays down while the command is active above the power threshold. "
-            "Press: tap once when the command crosses the threshold.",
+            "Press: tap once when the command crosses the threshold. "
+            "Spam: re-tap at the configured interval while above threshold.",
+            style=pack_muted_small(padding_bottom=8),
+        )
+    )
+
+    mental_repeat_default_row = toga.Box(style=Pack(direction=ROW, padding_top=4))
+    mental_repeat_default_row.add(
+        toga.Label(
+            "Spam interval (ms)",
+            style=Pack(flex=1),
+        )
+    )
+    mental_repeat_default = toga.NumberInput(
+        min=MIN_KEYBOARD_REPEAT_INTERVAL_MS,
+        max=MAX_KEYBOARD_REPEAT_INTERVAL_MS,
+        step=10,
+        value=int(config_data.keyboard_mental_repeat_interval_ms),
+        style=mental_interval_input_pack,
+    )
+    mental_repeat_default_row.add(mental_repeat_default)
+    box.add(mental_repeat_default_row)
+    box.add(
+        toga.Label(
+            "Used for all mental command keys whose behavior is Spam.",
             style=pack_muted_small(padding_bottom=8),
         )
     )
@@ -388,14 +446,12 @@ def build_mental_tab(
         )
         row.add(te)
         ov_m = config_data.keyboard_mental_key_modes.get(cmd)
-        if ov_m == KEYBOARD_KEY_MODE_PRESS:
-            msel_val = "Press"
-        elif ov_m == KEYBOARD_KEY_MODE_HOLD:
-            msel_val = "Hold"
+        if ov_m in _KEY_MODE_LABELS:
+            msel_val = _key_mode_word(ov_m)
         else:
             msel_val = mental_inherit_label
         msel = toga.Selection(
-            items=[mental_inherit_label, "Hold", "Press"],
+            items=[mental_inherit_label, "Hold", "Press", "Spam"],
             value=msel_val,
             style=mental_mode_sel_pack,
         )
@@ -405,16 +461,12 @@ def build_mental_tab(
         com_entries[cmd] = te
 
     def refresh_mental_per_inherit_labels(widget: Optional[toga.Widget] = None) -> None:
-        mode = (
-            KEYBOARD_KEY_MODE_PRESS
-            if mental_mode_global.value == "Press"
-            else KEYBOARD_KEY_MODE_HOLD
-        )
+        mode = _mode_from_label(mental_mode_global.value)
         label = inherit_key_mode_option_label(mode)
         for sel in mental_mode_per.values():
             cur = sel.value
             using_default = is_inherit_key_mode_selection(cur)
-            sel.items = [label, "Hold", "Press"]
+            sel.items = [label, "Hold", "Press", "Spam"]
             sel.value = label if using_default else cur
 
     mental_mode_global.on_change = refresh_mental_per_inherit_labels
@@ -426,18 +478,20 @@ def build_mental_tab(
         config_data.com_power_threshold = float(com_thr.value)
         for cmd in COM_MAPPED_MENTAL_ACTIONS:
             config_data.com_key_bindings[cmd] = com_entries[cmd].value.strip()
-        config_data.keyboard_mental_key_mode = (
-            KEYBOARD_KEY_MODE_PRESS
-            if mental_mode_global.value == "Press"
-            else KEYBOARD_KEY_MODE_HOLD
-        )
+        config_data.keyboard_mental_key_mode = _mode_from_label(mental_mode_global.value)
         cm: dict[str, str] = {}
         for cmd in COM_MAPPED_MENTAL_ACTIONS:
             sel = mental_mode_per[cmd].value
             if is_inherit_key_mode_selection(sel):
                 continue
-            cm[cmd] = KEYBOARD_KEY_MODE_PRESS if sel == "Press" else KEYBOARD_KEY_MODE_HOLD
+            cm[cmd] = _mode_from_label(sel)
         config_data.keyboard_mental_key_modes = cm
+        try:
+            config_data.keyboard_mental_repeat_interval_ms = int(
+                mental_repeat_default.value
+            )
+        except (TypeError, ValueError):
+            pass
         on_save()
 
     box.add(settings_tab_save_row(save_mental))

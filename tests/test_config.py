@@ -55,6 +55,72 @@ def test_keyboard_per_key_modes_merge_and_strip_unknown():
     assert cfg.keyboard_mental_key_modes == {"push": "hold"}
 
 
+def test_keyboard_per_key_modes_accept_spam():
+    from app import AppConfig
+    from bridge_core import KEYBOARD_KEY_MODE_SPAM
+
+    cfg = AppConfig(
+        keyboard_motion_key_mode="spam",
+        keyboard_mental_key_mode="spam",
+        keyboard_motion_key_modes={"forward": "spam"},
+        keyboard_mental_key_modes={"push": "spam"},
+    )
+    assert cfg.keyboard_motion_key_mode == KEYBOARD_KEY_MODE_SPAM
+    assert cfg.keyboard_mental_key_mode == KEYBOARD_KEY_MODE_SPAM
+    assert cfg.keyboard_motion_key_modes == {"forward": KEYBOARD_KEY_MODE_SPAM}
+    assert cfg.keyboard_mental_key_modes == {"push": KEYBOARD_KEY_MODE_SPAM}
+
+
+def test_keyboard_repeat_interval_defaults():
+    from app import AppConfig
+    from bridge_core import DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS
+
+    cfg = AppConfig()
+    assert cfg.keyboard_motion_repeat_interval_ms == DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS
+    assert cfg.keyboard_mental_repeat_interval_ms == DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS
+
+
+def test_keyboard_repeat_interval_clamping_and_coercion():
+    from app import AppConfig
+    from bridge_core import (
+        DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS,
+        MAX_KEYBOARD_REPEAT_INTERVAL_MS,
+        MIN_KEYBOARD_REPEAT_INTERVAL_MS,
+    )
+
+    cfg = AppConfig(
+        keyboard_motion_repeat_interval_ms="250",
+        keyboard_mental_repeat_interval_ms=-5,
+    )
+    assert cfg.keyboard_motion_repeat_interval_ms == 250
+    assert cfg.keyboard_mental_repeat_interval_ms == DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS
+
+    cfg = AppConfig(
+        keyboard_motion_repeat_interval_ms=1,
+        keyboard_mental_repeat_interval_ms=999_999,
+    )
+    assert cfg.keyboard_motion_repeat_interval_ms == MIN_KEYBOARD_REPEAT_INTERVAL_MS
+    assert cfg.keyboard_mental_repeat_interval_ms == MAX_KEYBOARD_REPEAT_INTERVAL_MS
+
+    cfg = AppConfig(keyboard_motion_repeat_interval_ms="not-a-number")
+    assert cfg.keyboard_motion_repeat_interval_ms == DEFAULT_KEYBOARD_REPEAT_INTERVAL_MS
+
+
+def test_keyboard_repeat_interval_round_trip(monkeypatch, tmp_path):
+    import app as app_module
+
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(app_module, "CONFIG_PATH", path)
+    cfg = app_module.AppConfig(
+        keyboard_motion_repeat_interval_ms=250,
+        keyboard_mental_repeat_interval_ms=80,
+    )
+    app_module.save_config(cfg)
+    loaded = app_module.load_config()
+    assert loaded.keyboard_motion_repeat_interval_ms == 250
+    assert loaded.keyboard_mental_repeat_interval_ms == 80
+
+
 def test_keyboard_motion_hysteresis_default_and_clamp():
     from app import AppConfig
     from core import DEFAULT_KEYBOARD_MOTION_HYSTERESIS_FRAC

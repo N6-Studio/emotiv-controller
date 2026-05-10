@@ -238,6 +238,8 @@ class EmotivBridgeApp(toga.App):
         self._main_view: Optional[MainViewRefs] = None
         self._calibration_refs: Optional[CalibrationViewRefs] = None
         self._calibration_review_refs: Optional[CalibrationReviewViewRefs] = None
+        self._crosshair_pad_row: Optional[toga.Box] = None
+        self._crosshair_pad_row_cap_h: Optional[int] = None
 
     def startup(self) -> None:
         self.main_window = toga.MainWindow(
@@ -400,6 +402,8 @@ class EmotivBridgeApp(toga.App):
         self._movement_pad_square_labels = []
         self._movement_pad_cell_size = 0
         self._com_key_badge_display.clear()
+        self._crosshair_pad_row = None
+        self._crosshair_pad_row_cap_h = None
 
     def _restart_cortex_client(self, *, clear_error_ui: bool, status_message: str) -> None:
         if self.cortex is not None:
@@ -581,7 +585,25 @@ class EmotivBridgeApp(toga.App):
         pad_host = toga.Box(style=Pack(padding=8, flex=1))
         visual_row.add(pad_host)
         self.create_movement_pad(pad_host)
+        self._crosshair_pad_row = visual_row
         return visual_row
+
+    def _sync_crosshair_pad_row_max_height(self) -> None:
+        """Cap the crosshair + D-pad row to half the window height (Pack has no max_height)."""
+        row = self._crosshair_pad_row
+        if row is None:
+            return
+        if self.current_view in (AppView.SETTINGS, AppView.ENV_SETTINGS):
+            return
+        try:
+            win_h = int(self.main_window.size.height)
+        except Exception:
+            return
+        cap = max(win_h // 2, 1)
+        if cap == self._crosshair_pad_row_cap_h:
+            return
+        self._crosshair_pad_row_cap_h = cap
+        row.style.update(height=cap, flex=0)
 
     def _sync_live_motion_readout(self, value_labels: list[toga.Label]) -> None:
         if len(value_labels) != 3:
@@ -1181,6 +1203,7 @@ class EmotivBridgeApp(toga.App):
         self._update_ui_calibration_timer()
 
     def _update_ui_crosshair_and_pad_layout(self) -> None:
+        self._sync_crosshair_pad_row_max_height()
         self.draw_crosshair()
         self._sync_movement_pad_cell_layout()
         motion_pad = self.map_motion(self.current_x, self.current_y)

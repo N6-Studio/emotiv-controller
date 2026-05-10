@@ -21,15 +21,24 @@
     "right": "d"
   },
   "com_key_bindings": {
-    "push": "",
-    "pull": "",
-    "lift": "",
-    "drop": "f"
+    "push": "r",
+    "pull": "y",
+    "lift": "u",
+    "drop": "i"
   },
   "cortex_url": "ws://localhost:6868",
   "cortex_streams": "mot,com",
   "emotiv_client_id": "your_client_id",
   "emotiv_client_secret": "your_client_secret",
   "emotiv_license": "",
-  "emotiv_debit": 1
+  "emotiv_debit": 1,
+  "keyboard_motion_key_mode": "hold",
+  "keyboard_mental_key_mode": "spam",
+  "keyboard_motion_key_modes": {
+    "left": "spam",
+    "right": "press"
+  },
+  "keyboard_mental_key_modes": {},
+  "keyboard_motion_repeat_interval_ms": 100,
+  "keyboard_mental_repeat_interval_ms": 100
 }
