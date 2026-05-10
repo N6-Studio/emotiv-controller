@@ -91,6 +91,7 @@ _AIM_ACTIVATION_FILL = "rgba(13, 148, 136, 0.12)"
 _AIM_BOX_FRACTION = 0.46
 # Minimum side length (px) for the main-view crosshair canvas with flex=1 (intrinsic hint).
 _MAIN_CROSSHAIR_MIN = 280
+_STUDIO_LOGO_VIEW_PX = 32
 # Non-arrow D-pad cells use a fully transparent background (Toga/Travertino rgba).
 _DPAD_CELL_TRANSPARENT = "rgba(0, 0, 0, 0)"
 _DPAD_ARROW_IDLE_BG = "#e5e7eb"
@@ -168,10 +169,40 @@ def _icon() -> Optional[toga.Icon]:
     return None
 
 
+def _studio_logo_path() -> Optional[Path]:
+    if getattr(sys, "frozen", False):
+        mei = getattr(sys, "_MEIPASS", None)
+        if mei:
+            p = Path(mei) / "assets" / "n6-studio-logo.png"
+        else:
+            p = Path(sys.executable).resolve().parent / "assets" / "n6-studio-logo.png"
+    else:
+        p = Path(__file__).resolve().parent.parent / "assets" / "n6-studio-logo.png"
+    return p if p.is_file() else None
+
+
+def _studio_logo_view() -> Optional[toga.ImageView]:
+    p = _studio_logo_path()
+    if p is None:
+        return None
+    try:
+        # Toga resolves str/Path image sources against App.paths.app; load bytes instead.
+        return toga.ImageView(
+            toga.Image(p.read_bytes()),
+            style=Pack(
+                width=_STUDIO_LOGO_VIEW_PX,
+                height=_STUDIO_LOGO_VIEW_PX,
+                alignment=TOP,
+            ),
+        )
+    except Exception:
+        return None
+
+
 class EmotivBridgeApp(toga.App):
     def __init__(self) -> None:
         kw: dict[str, Any] = dict(
-            formal_name="EMOTIV Movement",
+            formal_name="EMOTIV Controller",
             app_id="studio.n6.emotiv.movement",
             author="N6 Studio",
         )
@@ -243,7 +274,7 @@ class EmotivBridgeApp(toga.App):
 
     def startup(self) -> None:
         self.main_window = toga.MainWindow(
-            title="EMOTIV Movement",
+            title="EMOTIV Controller",
             size=(680, 580),
             resizable=True,
         )
@@ -638,11 +669,36 @@ class EmotivBridgeApp(toga.App):
         refs.error_label = toga.Label("", style=pack_error())
         err_box.add(refs.error_label)
 
-        top = toga.Box(style=Pack(direction=ROW, padding_left=10, padding_right=10, padding_top=10, alignment=TOP))
-        err_box.add(top)
+        brand_row = toga.Box(style=Pack(direction=ROW, padding_left=10, padding_right=10, padding_top=2, alignment=TOP))
+        err_box.add(brand_row)
+
+        brand = toga.Box(style=Pack(direction=ROW, alignment=CENTER))
+        logo = _studio_logo_view()
+        name_pad_left = 0
+        if logo is not None:
+            brand.add(logo)
+            name_pad_left = 6
+        brand.add(
+            toga.Label(
+                "N6 Studio",
+                style=Pack(
+                    font_size=12,
+                    font_weight="bold",
+                    color="#334155",
+                    padding_left=name_pad_left,
+                    alignment=CENTER,
+                ),
+            )
+        )
+        brand_row.add(brand)
+
+        status_row = toga.Box(
+            style=Pack(direction=ROW, padding_left=10, padding_right=10, padding_top=6, alignment=TOP),
+        )
+        err_box.add(status_row)
 
         info_left = toga.Box(style=Pack(direction=ROW, flex=1, alignment=CENTER))
-        top.add(info_left)
+        status_row.add(info_left)
         # WinForms backend does not implement ActivityIndicator.
         if sys.platform != "win32":
             refs.connection_activity = toga.ActivityIndicator(style=Pack(width=22, height=22, padding_right=8))
@@ -664,7 +720,7 @@ class EmotivBridgeApp(toga.App):
             "",
             style=pack_status_line(text_align=RIGHT),
         )
-        top.add(refs.keyboard_label)
+        status_row.add(refs.keyboard_label)
 
         refs.retry_button = toga.Button(
             "Retry connection",

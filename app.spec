@@ -8,7 +8,10 @@ _emotiv_console = os.environ.get("EMOTIV_PYI_DEBUG", "0").strip().lower() in ("1
 
 _spec_dir = os.path.abspath(os.path.dirname(SPEC))
 
-_datas = [(os.path.join(_spec_dir, "assets", "app.ico"), "assets")]
+_datas = [
+    (os.path.join(_spec_dir, "assets", "app.ico"), "assets"),
+    (os.path.join(_spec_dir, "assets", "n6-studio-logo.png"), "assets"),
+]
 
 _ver = os.environ.get("EMOTIV_PYI_APP_VERSION", "").strip()
 if not _ver:
